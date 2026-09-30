@@ -1,5 +1,24 @@
 # Implementation Plan
 
+## v0.1 implementation status
+
+The initial implementation now covers the executable research path described below. [Runtime guide](RUNTIME.md) documents the exact commands, service boundaries and limits. Source evidence, model/tool traces, reports, candidate states, watches, outbox, jobs and outcomes persist separately. No legacy recommendations or decision graph were migrated.
+
+| Phases | Implemented | Validation |
+|---|---|---|
+| 0–1 | Docs, Pydantic contracts, evidence ledger, provenance/numeric checks | Offline schema/evidence tests |
+| 2 | Read-only Toss, SEC submissions/company facts, fees/account | Mocked external HTTP contracts |
+| 3 | Technical indicators, ratio arithmetic, RR, sizing/cost/concentration validation | Known numerical values and invalid-input tests |
+| 4 | Brave, HTML/PDF reader, Chromium element/coordinate/tabs/download tools, egress restrictions | HTTP fixtures and actual local Chromium |
+| 5–7 | Tool loop, budgets/checkpoints, analyst sections, debate/rebuttals, risk committee, premortem, PM | Scripted-model full-flow tests, Responses contract mock |
+| 8–10 | Plan rejection/retry, candidate memory, scheduled watch, change-based Discord outbox | Risk, holdings/state, condition-hit and duplicate-alert tests |
+| 11 | Session-aligned forward returns, benchmark-relative returns, MFE/MAE, audit events | Formula tests; actual-fill realized R remains absent |
+| 12 | Locked dependencies, Docker/Compose, PostgreSQL migration, health/restart/log rotation, backup guide | Fresh SQLite migration tested; PostgreSQL and image builds configured in CI |
+
+The implementation is testable without live credentials. Live provider behavior, Oracle resource/sandbox configuration, webhook delivery and production restart recovery require deployment acceptance. They must not be reported as verified by offline tests. Aggregate false-alert precision and entry-hit evaluation need independently labeled outcomes; stored events are inputs for that work. Automatic orders remain outside v1.
+
+The phases below remain the architectural acceptance criteria and describe future extensions where v0.1 has a limited initial adapter set.
+
 ## Phase 0 — Architecture bootstrap
 
 Goal: make the repository self-describing.

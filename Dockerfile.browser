@@ -1,0 +1,13 @@
+FROM python:3.13-slim-bookworm
+RUN pip install --no-cache-dir uv==0.7.19
+WORKDIR /srv
+COPY pyproject.toml uv.lock ./
+COPY src ./src
+COPY docs ./docs
+RUN uv sync --frozen --no-dev && .venv/bin/playwright install --with-deps chromium
+RUN useradd --create-home --uid 10001 browser && mkdir -p /home/browser/.cache && cp -r /root/.cache/ms-playwright /home/browser/.cache/ && chown -R browser:browser /home/browser
+USER browser
+ENV PATH="/srv/.venv/bin:$PATH"
+ENV PLAYWRIGHT_BROWSERS_PATH="/home/browser/.cache/ms-playwright"
+ENV HOME="/tmp"
+CMD ["uvicorn", "worker_browser.server:app", "--host", "0.0.0.0", "--port", "8001"]

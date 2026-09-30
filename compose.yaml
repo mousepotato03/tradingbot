@@ -1,0 +1,134 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+services:
+  postgres:
+    logging: *default-logging
+    image: postgres:18
+    environment:
+      POSTGRES_USER: research
+      POSTGRES_DB: research
+      POSTGRES_PASSWORD: ${TRADINGBOT_POSTGRES_PASSWORD:?Set database password}
+    volumes:
+      - database:/var/lib/postgresql
+    networks: [core]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U research -d research]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  migrate:
+    logging: *default-logging
+    build: .
+    command: [alembic, upgrade, head]
+    environment:
+      TRADINGBOT_DATABASE_HOST: postgres
+      TRADINGBOT_POSTGRES_PASSWORD: ${TRADINGBOT_POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [core]
+  research-api:
+    logging: *default-logging
+    build: .
+    environment:
+      TRADINGBOT_MODE: live
+      TRADINGBOT_DATABASE_HOST: postgres
+      TRADINGBOT_POSTGRES_PASSWORD: ${TRADINGBOT_POSTGRES_PASSWORD}
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [core]
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  research-worker:
+    logging: *default-logging
+    build: .
+    command: [python, -m, app.worker]
+    environment:
+      TRADINGBOT_MODE: live
+      TRADINGBOT_DATABASE_HOST: postgres
+      TRADINGBOT_POSTGRES_PASSWORD: ${TRADINGBOT_POSTGRES_PASSWORD}
+      TRADINGBOT_OPENAI_API_KEY: ${TRADINGBOT_OPENAI_API_KEY:?Set model key}
+      TRADINGBOT_RESEARCH_MODEL: ${TRADINGBOT_RESEARCH_MODEL:?Set research model}
+      TRADINGBOT_PM_MODEL: ${TRADINGBOT_PM_MODEL:?Set PM model}
+      TRADINGBOT_TOSS_CLIENT_ID: ${TRADINGBOT_TOSS_CLIENT_ID:?Set Toss client id}
+      TRADINGBOT_TOSS_CLIENT_SECRET: ${TRADINGBOT_TOSS_CLIENT_SECRET:?Set Toss secret}
+      TRADINGBOT_TOSS_ACCOUNT_SEQ: ${TRADINGBOT_TOSS_ACCOUNT_SEQ:-}
+      TRADINGBOT_BRAVE_API_KEY: ${TRADINGBOT_BRAVE_API_KEY:?Set Brave key}
+      TRADINGBOT_SEC_USER_AGENT: ${TRADINGBOT_SEC_USER_AGENT:?Set SEC contact}
+      TRADINGBOT_BROWSER_TOKEN: ${TRADINGBOT_BROWSER_TOKEN:?Set browser token}
+      TRADINGBOT_BROWSER_URL: http://browser-worker:8001
+      TRADINGBOT_EGRESS_PROXY: http://egress-proxy:3128
+      TRADINGBOT_DISCORD_WEBHOOK: ${TRADINGBOT_DISCORD_WEBHOOK:-}
+      TRADINGBOT_DISCOVERY_ENABLED: ${TRADINGBOT_DISCOVERY_ENABLED:-false}
+      TRADINGBOT_DISCOVERY_BATCH: ${TRADINGBOT_DISCOVERY_BATCH:-5}
+      TRADINGBOT_BENCHMARK_TICKER: ${TRADINGBOT_BENCHMARK_TICKER:-SPY}
+      TRADINGBOT_RETAIN_BROWSER_SCREENSHOTS: ${TRADINGBOT_RETAIN_BROWSER_SCREENSHOTS:-false}
+      TRADINGBOT_RETAINED_DOCUMENT_HOSTS: ${TRADINGBOT_RETAINED_DOCUMENT_HOSTS:-["www.sec.gov","sec.gov","data.sec.gov","www.federalreserve.gov","www.bls.gov","www.bea.gov"]}
+    volumes: ["research:/srv/.research"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      browser-worker:
+        condition: service_started
+    networks: [core, browser-control, public]
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 2m
+    healthcheck:
+      test: [CMD, python, -c, "from pathlib import Path; import time; assert time.time()-Path('/srv/.research/worker-heartbeat').stat().st_mtime < 120"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+  browser-worker:
+    logging: *default-logging
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+    environment:
+      BROWSER_TOKEN: ${TRADINGBOT_BROWSER_TOKEN:?Set browser token}
+      BROWSER_EGRESS_PROXY: http://egress-proxy:3128
+    networks: [browser-control]
+    read_only: true
+    tmpfs: ["/tmp:size=512m,uid=10001,gid=10001"]
+    shm_size: 256mb
+    mem_limit: 1536m
+    cpus: 1
+    pids_limit: 256
+    security_opt: ["no-new-privileges:true", "seccomp:./deploy/seccomp_profile.json"]
+    cap_drop: [ALL]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  egress-proxy:
+    logging: *default-logging
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    volumes: ["./deploy/squid.conf:/etc/squid/squid.conf:ro"]
+    networks: [browser-control, public]
+    restart: unless-stopped
+networks:
+  core:
+    internal: true
+  browser-control:
+    internal: true
+  public: {}
+volumes:
+  database: {}
+  research: {}

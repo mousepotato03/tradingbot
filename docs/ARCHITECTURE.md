@@ -57,7 +57,24 @@ The core split is:
                    └──────────────────┘
 ```
 
-## 3. Suggested code layout
+## 3. Component boundaries
+
+v0.1 keeps these boundaries in small typed modules rather than creating empty package layers. The current mapping is:
+
+| Boundary | Implementation |
+|---|---|
+| Schemas / evidence validation | `app/models.py`, `app/evidence.py` |
+| Provider adapters | `app/adapters/{toss,sec,web,browser,http}.py` |
+| Tool contracts / calculations | `app/tools.py`, `app/analytics.py` |
+| Model port / orchestration | `app/llm.py`, `app/engine.py` |
+| Numerical / trade validation | `app/validation.py` |
+| Persistence / migrations | `app/storage.py`, `migrations/` |
+| Candidates / monitoring | `app/lifecycle.py`, `app/discovery.py`, `app/monitoring.py` |
+| Notifications / evaluation | `app/notifications.py`, `app/evaluation.py` |
+| API / CLI / worker | `app/api.py`, `app/cli.py`, `app/worker.py` |
+| Isolated Chromium | `worker_browser/server.py` |
+
+The larger layout below is a possible expansion path; it is not a requirement to import another agent framework.
 
 ```
 src/
@@ -152,13 +169,24 @@ Recommended deployment:
 ```
 docker compose
   research-api
-  scheduler
+  research-worker
+  migrate
   browser-worker
-  database
-  discord-worker (optional separate process)
+  postgres
+  egress-proxy
 ```
 
 ### research-api
+
+Owns:
+
+- request validation and durable queue submission
+- read-only status, reports and evidence endpoints
+- local-only host binding
+
+It does not receive broker/model/search credentials.
+
+### research-worker
 
 Owns:
 
@@ -168,6 +196,9 @@ Owns:
 - portfolio manager
 - deterministic validation
 - storage
+- background monitoring, discovery, notification outbox and evaluation
+
+One worker owns the Toss token and serializes authentication/requests. This avoids invalidating another process's token. A scheduler thread runs alongside research so long model calls do not suspend condition checks. Persistent jobs/checkpoints survive process restart; startup recovery assumes the previous sole worker has stopped.
 
 ### browser-worker
 
@@ -187,10 +218,12 @@ Security:
 - no root socket
 - no unrestricted host filesystem
 - strict network/time/resource limits where practical
+- private destinations rejected by both URL validation and an egress proxy
+- read-only non-root container; no core database network membership
 
 ### database
 
-Start with PostgreSQL if operationally convenient. SQLite is acceptable for an early prototype, but schemas must remain migration-friendly.
+Production Compose uses PostgreSQL 18 and Alembic. SQLite is used for offline fixtures and unit tests. Report/state/outbox updates are committed atomically. Existing legacy tables are not migrated into the new schema.
 
 ## 5. Domain entities
 
@@ -330,6 +363,8 @@ Suggested initial modes:
 
 These are ceilings, not targets.
 
+v0.1 also bounds model calls, elapsed time and recorded total token usage. Checks run at call boundaries; see [runtime limits](RUNTIME.md#6-조사-예산과-근거-한계). All perspectives retain tool access. Budget exhaustion becomes 판단 보류, never a default Hold.
+
 Use deep/critical for:
 
 - new large position
@@ -343,7 +378,7 @@ Use deep/critical for:
 
 Do not use the most expensive model for every symbol.
 
-Example:
+Future routing example:
 
 ```
 large universe
@@ -363,6 +398,8 @@ portfolio manager
 ```
 
 The model provider must remain behind an interface so models can change without rewriting orchestration.
+
+v0.1 uses two explicitly configured model IDs: research/review and portfolio manager. Official-universe discovery rotates a configured batch into research without a current-price entry gate. A cheap-model classification stage is not implemented yet.
 
 ## 9. State diffing
 
@@ -398,3 +435,9 @@ Examples:
 - model outputs unsupported claim -> remove/retry or downgrade confidence
 
 Never silently fill missing evidence with guessed numbers.
+
+## 11. v0.1 deployment and migration impact
+
+The rationale for the initial service split is token ownership and browser isolation. Brave is the search adapter; native OpenAI Responses tools provide autonomous research while direct HTML/PDF reads precede Chromium fallback. Screenshot-coordinate operations are ordinary restricted browser tools, without a model-accessible shell.
+
+There is no dependency on TradingAgents or its decision graph. Initial migration `0001` creates a new database. Old recommendation history must be separately imported and marked as legacy if that work is authorized later. Current fixture reports are clearly synthetic and cannot emit live notifications. See [runtime and operations](RUNTIME.md) for credentials, backup, limits and live acceptance checks.

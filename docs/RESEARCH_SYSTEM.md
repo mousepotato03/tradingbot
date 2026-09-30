@@ -54,6 +54,8 @@ Best for:
 
 Use for discovery and breadth.
 
+v0.1 implements Brave Search API behind a provider adapter. It is the default discovery mechanism; Chromium is a fallback. Search snippets remain unusable as FACT evidence. OpenAI Responses native function calling chooses queries and follow-up sources autonomously.
+
 The research agent may formulate new searches based on previous findings.
 
 Rules:
@@ -259,7 +261,7 @@ Prompt injection inside web content must be treated as content, not instruction.
 
 ## 10. Python calculation tool
 
-Provide a sandboxed calculation tool for:
+Prefer deterministic Python implementations for:
 
 - indicators
 - regressions
@@ -269,6 +271,8 @@ Provide a sandboxed calculation tool for:
 - dataframe transforms
 
 Prefer deterministic library/code implementations for repeatable finance calculations instead of asking the LLM to perform arithmetic in prose.
+
+v0.1 exposes a restricted evidence-based operation set (`ratio`, `multiply`, `add`, `subtract`, ATR offsets) and tested indicator/sizing functions. It does not expose arbitrary Python source, `eval`, a host shell or dataframe/file access. Derived facts link input evidence IDs, operation and explicit assumptions. Recent observed highs/lows are labeled as observations rather than automatically asserted support/resistance.
 
 ## 11. PDFs
 
@@ -317,3 +321,13 @@ Persist per run:
 - retry/fallback path
 
 This allows diagnosis of poor research quality without guessing.
+
+## 14. Implemented contracts and remaining data gaps
+
+`market_identity`, `market_quote`, `market_ohlcv`, `portfolio_read`, `fees_read`, `filings_read`, `financials_read`, `web_search`, `web_read`, `browser_open`, `browser_action`, `evidence_read`, `extract_fact` and `calculate` return typed EvidenceRecords. Peer tickers are allowed for comparable research; trade validation always checks the primary security.
+
+The director produces analysis sections and explicit sufficiency/gaps. Bull, bear, rebuttals, research manager, three risk perspectives and premortem each produce structured findings and can obtain additional evidence. The PM produces the six-level rating and separate entry/holder actions. Rejected numeric plans and unsupported claims are retained in the audit trail; two correction opportunities precede a deferred decision.
+
+The implementation reads the canonical Korean research standard into its policy prompt. External content remains untrusted data. Citation/numeric checks do not prove semantic entailment of every qualitative statement. Important conflicting facts and uncertain document labels must be resolved by source review or reported as material gaps. No consensus/forecast/earnings-calendar provider is fabricated; the researcher seeks original sources or reports unavailability.
+
+Official XBRL facts preserve metric tags, units, accounting periods and accession references. Custom/IFRS tags and image-only PDFs remain limitations. HTML/PDF body retention is restricted by approved host; other sources preserve hashes, metadata, page numbers and snippets. Screenshots can be used by the model without keeping image files. See [retention and replay](RUNTIME.md#7-보존과-replay).

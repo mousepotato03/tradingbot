@@ -104,3 +104,11 @@ Old recommendations should be marked as legacy methodology and must not be treat
 The first version does not need to preserve old module paths.
 
 Clean architecture is more important than backward compatibility with monitor internals.
+
+## 8. v0.1 inspected sources and disposition
+
+The adjacent `TradingAgents` Git snapshot `bf186fd8cac8defee75650d33da9630cb514ef1d` was available even though its working files had been removed. Infrastructure references inspected via `git show` were `tradingagents/monitor/toss.py` and `tradingagents/monitor/discord.py`. Its environment secrets were not loaded or copied.
+
+The new read-only Toss adapter was implemented against the [official OpenAPI specification](https://openapi.tossinvest.com/openapi-docs/latest/openapi.json), checked against legacy endpoint/authentication experience, and tested with offline fixtures. No legacy monitor classes, prompt/action gates, tables, graph or recommendation policy were imported. Discord delivery uses a new persistent outbox and disables mentions.
+
+Migration impact: new database and configuration namespace (`TRADINGBOT_`), no compatibility layer for old Python module paths, no automatic import of old decisions, and no concurrent Toss token owner. Validated numerical helpers are new independent functions with known-value tests.
