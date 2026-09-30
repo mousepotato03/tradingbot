@@ -199,6 +199,41 @@ This does not imply initiating a short position.
 
 Material evidence is missing/conflicting/stale enough that a tradeable rating is not justified.
 
+### Decision contract
+
+The rating, both actions, the thesis state and the trade plan must describe one decision. The deterministic validator (`app/validation.py`) rejects any other combination; it does not repair it.
+
+| Rating | New entry action | Existing holder action | Thesis state |
+|---|---|---|---|
+| Buy | 지금 진입 `ENTER_NOW`, 조건부 진입 `CONDITIONAL_ENTRY`, 분할 진입 `STAGED_ENTRY` | 추가 매수 `ADD`, 유지 `HOLD` | `ACTIVE` |
+| Overweight | 분할 진입, 조건부 진입 | 추가 매수, 유지 | `ACTIVE` |
+| Hold | 관망 `WAIT`, 조건부 진입 | 유지, 이익 보호 `PROTECT_PROFIT` | `ACTIVE`, `WEAKENED` |
+| Underweight | 진입 회피 `AVOID` | 일부 축소 `TRIM`, 이익 보호 | `ACTIVE`, `WEAKENED` |
+| Sell | 진입 회피 | 청산 `EXIT`, 일부 축소 | `ACTIVE`, `WEAKENED`, `INVALIDATED` |
+| 판단 보류 | 판단 보류 `DEFER` | 판단 보류 | any |
+
+Actions come from the research standard's lists (section 4). Free-text notes may qualify an action but never replace it.
+
+Additional rules:
+
+- Every rating other than 판단 보류 needs at least one thesis claim that cites evidence and is not an ASSUMPTION. Hold is not special: Buy and Sell need the same grounding.
+- A long `TradePlan` exists only for an entry action (`ENTER_NOW`, `CONDITIONAL_ENTRY`, `STAGED_ENTRY`) or a holder `ADD`. Underweight, Sell and 판단 보류 carry no long entry plan.
+- `ENTER_NOW` and `STAGED_ENTRY` execute now, so a fresh quote must lie inside the entry range. A good company whose price is outside the range stays a candidate through `CONDITIONAL_ENTRY` (Buy/Overweight/Hold), not through a forced Hold.
+- 판단 보류 must name at least one blocking gap. An unexplained 판단 보류 is as unacceptable as a default Hold.
+
+### Material gaps
+
+Every stage reports gaps with a proposed severity: `blocking` (a tradeable rating is not justified) or `non_blocking` (a limitation to disclose).
+
+Only two roles make a gap binding:
+
+- the **research manager**, after the debate, through its blocking gaps and its explicit `evidence_sufficient` judgment;
+- the **portfolio manager**, through the gaps it keeps in its decision.
+
+Missing personal inputs (portfolio value, maximum loss, horizon, look-through exposure via funds) prevent a quantity, not a rating: they are non-blocking and the plan omits `quantity`.
+
+A binding blocking gap requires 판단 보류. Gaps raised by the director, debaters, risk perspectives or premortem are shown to the portfolio manager as open gaps and remain in the report, but one reviewer can no longer force 판단 보류 alone. The director's early insufficiency is a research to-do list for later stages, not a verdict.
+
 ## 11. Trading plan rules
 
 Only produce precise levels when supported by verified data.
@@ -259,6 +294,13 @@ Then apply:
 - FX
 - gap risk
 
+Quantities follow the broker's tradable step. The Toss Open API accepts whole-share quantities for limit and quantity orders. A fractional U.S. buy is a dollar-amount market order (`orderAmount`) during the regular session, filled to six decimal places. A plan therefore declares `sizing_unit`:
+
+- `whole_share` (default): quantity floored to whole shares; the entry range behaves like a limit.
+- `fractional_amount`: quantity floored to 0.000001 share; the fill is a market price, so slippage assumptions apply and no limit is implied.
+
+A small account may therefore show zero whole shares while a fractional amount is still valid. The validator floors; it never rounds up.
+
 ### Risk/reward
 
 For a long trade:
@@ -269,6 +311,15 @@ RR = (target - entry) / (entry - stop)
 
 Only calculate when all inputs are validated and comparable.
 
+### Holding guard
+
+An existing holding needs levels the monitor can watch, not only a narrative. For a position the account shows as held, the portfolio manager provides `position_guard` unless the holder action is `EXIT`:
+
+- a stop below the current price (for example the structural low that breaks the thesis, or a loss limit) and optional take-profit prices above it, where a trim should be reviewed;
+- each level equals an observed or deterministically calculated price fact, like trade-plan levels.
+
+The validator checks evidence, lineage freshness and position relative to the fresh price. A guard may accompany 판단 보류: it protects the existing holding and is not a new trade. Guard levels are judged only on regular-session prices, so thin pre-market or after-hours trades do not trigger them.
+
 ## 12. New entrant vs holder
 
 Always produce both:
@@ -276,7 +327,7 @@ Always produce both:
 - new-entry action
 - existing-holder action
 
-The same rating may translate differently.
+The same rating may translate differently. Both are enumerated values (see the decision contract), so a monitor or reviewer can compare them across reports without parsing prose.
 
 ## 13. Risk committee
 
@@ -296,7 +347,13 @@ The final manager weighs:
 - user risk limits
 - existing exposure
 
-## 14. No-action is a real decision, not a default
+## 14. ETFs
+
+Plain (unleveraged, non-inverse) ETFs are researched on their own terms: index and methodology, expense ratio, holdings concentration, sector/country exposure, liquidity and tracking. Issuer financial statements do not apply. The official structured basis is the fund's latest SEC N-PORT filing (holdings, net assets, asset and country mix), with the summary prospectus for fees and strategy. Weights in N-PORT lag the report date and must be labeled as such.
+
+Leveraged or inverse funds and ETNs are rejected at identity. Funds absent from SEC's fund ticker mapping (`company_tickers_mf.json`), such as UIT-structured SPY without a series ID, have no automated holdings source yet and resolve to 판단 보류 rather than an equity-style analysis.
+
+## 15. No-action is a real decision, not a default
 
 Do not force trades.
 

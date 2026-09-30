@@ -9,13 +9,40 @@ The initial implementation now covers the executable research path described bel
 | 0–1 | Docs, Pydantic contracts, evidence ledger, provenance/numeric checks | Offline schema/evidence tests |
 | 2 | Read-only Toss, SEC submissions/company facts, fees/account | Mocked external HTTP contracts |
 | 3 | Technical indicators, ratio arithmetic, RR, sizing/cost/concentration validation | Known numerical values and invalid-input tests |
-| 4 | Brave, HTML/PDF reader, Chromium element/coordinate/tabs/download tools, egress restrictions | HTTP fixtures and actual local Chromium |
+| 4 | Brave (Tavily default since v0.2), HTML/PDF reader, Chromium element/coordinate/tabs/download tools, egress restrictions | HTTP fixtures and actual local Chromium |
 | 5–7 | Tool loop, budgets/checkpoints, analyst sections, debate/rebuttals, risk committee, premortem, PM | Scripted-model full-flow tests, Responses contract mock |
 | 8–10 | Plan rejection/retry, candidate memory, scheduled watch, change-based Discord outbox | Risk, holdings/state, condition-hit and duplicate-alert tests |
 | 11 | Session-aligned forward returns, benchmark-relative returns, MFE/MAE, audit events | Formula tests; actual-fill realized R remains absent |
 | 12 | Locked dependencies, Docker/Compose, PostgreSQL migration, health/restart/log rotation, backup guide | Fresh SQLite migration tested; PostgreSQL and image builds configured in CI |
 
 The implementation is testable without live credentials. Live provider behavior, Oracle resource/sandbox configuration, webhook delivery and production restart recovery require deployment acceptance. They must not be reported as verified by offline tests. Aggregate false-alert precision and entry-hit evaluation need independently labeled outcomes; stored events are inputs for that work. Automatic orders remain outside v1.
+
+### v0.2 review fixes
+
+A code review of v0.1 found decision, audit, safety and scale defects. They are fixed with policy recorded in [Investment Policy](INVESTMENT_POLICY.md#decision-contract) and runtime behavior in [Runtime](RUNTIME.md).
+
+| Priority | Change | Validation |
+|---|---|---|
+| P0 | Gap severity; only research manager/PM bind; 판단 보류 must name a blocking gap | Engine tests with advisory vs binding gaps |
+| P0 | Enumerated new-entry/holder actions; rating × action × thesis × plan matrix | Full cartesian test of every cell |
+| P0 | Evidence-backed thesis required for every tradeable rating | Validator tests |
+| P0 | Evidence index context, bounded tool previews, condensed history, read-only `evidence_read` | Context-size and prune tests |
+| P0 | `monitor_observations`; completed evidence immutable | Monitor and storage tests |
+| P0 | Watch stores the base request; follow-ups inherit it with a `trigger` | Inheritance test |
+| P0 | Browser GET/HEAD only, POST allowlist, WebSockets blocked | Actual Chromium POST/WebSocket test |
+| P1 | Batched quotes, shared account snapshot, per-group Toss rate limiter | Fake-clock limiter and batching tests |
+| P1 | Screen → triage → deep discovery; trend ranks, never gates | Discovery tests |
+| P1 | IFRS company facts; plain ETF path from N-PORT | Adapter tests on SEC-shaped fixtures |
+| P1 | Quote-span grounding for qualitative FACTs; quotation records | Claim and retention tests |
+| P1 | Freshness inheritance and lineage validation | Stale-indicator tests |
+| P1 | Main-content reader, JSON-LD dates, SEC-only User-Agent | Reader tests |
+| P1 | Quantity step: whole shares or fractional amount | Sizing tests |
+| P2 | Search freshness/domain/country/language/offset/topic; Tavily default provider, Brave optional; rolling 30-day local search cap | Tavily/Brave contract and cap tests |
+| P1 | Toss USD holdings watched automatically; follow-up investor status follows the account | Holdings auto-watch tests |
+| P2 | Outcome maturity; settled reports not re-fetched | Evaluation test |
+| P2 | Per-role reasoning effort and a triage model | Responses contract test |
+
+Migration `0002` adds the observation table and outcome maturity, and `0003` the search usage table; older reports load through model coercion. Real-time WebSocket quotes, custom XBRL tags, ETF sector/factor exposure beyond N-PORT asset/country mix, UIT-structured funds without a SEC series, and a retention job for monitor observations remain open. The fixes are verified offline (SQLite, fixtures shaped from the official Toss OpenAPI, SEC company facts and N-PORT responses, and local Chromium); PostgreSQL runs in CI, and live providers still need deployment acceptance.
 
 The phases below remain the architectural acceptance criteria and describe future extensions where v0.1 has a limited initial adapter set.
 

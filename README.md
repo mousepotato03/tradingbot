@@ -66,7 +66,7 @@ uv run tradingbot doctor
 
 기본 `fixture` 모드는 합성 자료와 scripted model로 전체 파이프라인을 실행한다. 키 없이 동작하며 실제 종목 분석이나 Discord 전송을 하지 않는다. 결과는 `.research/`에 저장한다.
 
-실제 조사에는 `.env.example`을 `.env`로 복사하고 Toss·OpenAI·Brave 키, 모델명, SEC 연락처를 설정한다. Oracle 배포, 요청 API, 리스크 입력, 백업 방법은 [운영 가이드](docs/RUNTIME.md)에 정리했다.
+실제 조사에는 `.env.example`을 `.env`로 복사하고 Toss·OpenAI·Tavily(기본 검색) 키, 모델명, SEC 연락처를 설정한다. Oracle 배포, 요청 API, 리스크 입력, 백업 방법은 [운영 가이드](docs/RUNTIME.md)에 정리했다.
 
 ```powershell
 uv run playwright install chromium
@@ -78,5 +78,12 @@ uv run ruff format --check src tests migrations
 ## 구현 상태
 
 v0.1은 Toss 읽기 전용 계좌·시세·봉·수수료, SEC 공시·재무, Brave 검색, HTML/PDF reader, 격리된 Chromium worker, OpenAI tool calling, 강세/약세 논쟁·리스크 위원회·PM, 증거/수치 검증, 후보 감시·변화 알림·성과 기록을 구현했다. SQLite fixture 실행과 PostgreSQL/Alembic 기반 Compose 배포 구성을 제공한다.
+
+v0.2에서는 코드 리뷰 결과를 반영했다(상세: [Implementation Plan](docs/IMPLEMENTATION_PLAN.md#v02-review-fixes)).
+- 판단 구조: 등급·행동·논지·거래안 일관성 계약, gap 심각도, 인용 span 검증
+- 감사 가능성: 감시 관측값 분리, 파생 근거의 freshness 계보
+- 안전·규모: 읽기 전용 브라우저, 시세 일괄 조회와 그룹별 rate limit
+- 범위 확장: IFRS 재무, ETF(N-PORT) 조사 경로, 스크리닝→triage→심층 조사 발굴
+- 운영: Tavily 기본 검색과 30일 검색 상한, Toss 보유 종목 자동 감시
 
 외부 API는 mock으로 검증하고 실제 Chromium은 로컬 페이지로 검증한다. PostgreSQL 통합 테스트는 별도 테스트 DB에서 실행하며 CI에 포함했다. 실제 API 자격 증명과 Oracle VM을 이용한 운영 검증은 별도로 필요하다. 자동 주문 API는 구현 범위에 없다.

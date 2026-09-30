@@ -30,6 +30,8 @@ class Planner(FixtureModel):
                     "classification": "INTERPRETATION",
                 }
 
+            # A price level away from the current quote is a conditional entry, not a wait.
+            turn.result.new_entry_action = "CONDITIONAL_ENTRY"
             turn.result.trade_plan = TradePlan(
                 currency="USD",
                 entry_low=level("sma50"),
@@ -57,7 +59,8 @@ def test_outside_entry_range_keeps_watch_candidate_and_monitor_detects_hit(store
         quote.facts[0].value = entry
         return quote
 
-    engine.market.quote = reached
+    engine.market.quotes = lambda tickers: {t: reached(t) for t in tickers}
+    evidence_before = [r.evidence_id for r in store.evidence(run_id)]
     with store.transaction() as session:
         session.get(WatchRow, "TEST").next_condition_at = utcnow() - timedelta(seconds=1)
     Monitor(engine).tick()
@@ -71,6 +74,10 @@ def test_outside_entry_range_keeps_watch_candidate_and_monitor_detects_hit(store
     Monitor(engine).tick()
     with store.transaction() as session:
         assert session.scalar(select(func.count()).select_from(OutboxRow)) == count
+    # The completed report's evidence ledger is unchanged; monitor quotes are observations.
+    assert [r.evidence_id for r in store.evidence(run_id)] == evidence_before
+    observed = store.observations("TEST", "quote")
+    assert len(observed) == 2 and observed[-1].facts[0].value == entry
 
 
 def test_closed_session_retains_valid_plan_as_watch(store, settings):
@@ -104,7 +111,7 @@ def test_price_hit_requests_review_of_unverified_entry_conditions(store, setting
         record.facts[0].value = entry
         return record
 
-    engine.market.quote = quote
+    engine.market.quotes = lambda tickers: {t: quote(t) for t in tickers}
     with store.transaction() as session:
         session.get(WatchRow, "TEST").next_condition_at = utcnow() - timedelta(seconds=1)
     Monitor(engine).tick()
@@ -126,7 +133,7 @@ def test_changed_words_with_unchanged_evidence_do_not_alert(store, settings):
     assert not changes(first, second, store.evidence(second.run_id), store.evidence(first.run_id))
 
 
-def test_unresolvable_claims_are_deferred_and_audited(store, settings):
+def test_unresolvable_claims_are_removed_and_audited(store, settings):
     class Unsupported(FixtureModel):
         def complete(self, role, messages, tools, schema):
             if schema is ResearchSummary:
@@ -155,8 +162,15 @@ def test_unresolvable_claims_are_deferred_and_audited(store, settings):
 
     run_id = store.enqueue(ResearchRequest(ticker="TEST"))
     report = ResearchEngine(settings, store, model=Unsupported()).run(run_id)
-    assert report.decision.rating.value == "판단 보류"
-    assert sum(t["kind"] == "claim_rejection" for t in store.traces(run_id)) == 3
+    traces = store.traces(run_id)
+    # One correction, then the still-invalid claim is removed; the stage itself survives.
+    assert sum(t["kind"] == "claim_rejection" for t in traces) == 2
+    [removal] = [t for t in traces if t["kind"] == "claim_removal"]
+    assert removal["role"] == "research_director" and removal["removed"][0]["text"] == "Claim"
+    assert report.research.sections[0].claims == []
+    gap = report.research.material_gaps[-1]
+    assert gap.severity == "non_blocking" and "1건" in gap.description
+    assert len(report.reviews) == 9 and report.validation.valid
 
 
 def test_discord_mentions_disabled_and_fixture_does_not_send(store):
@@ -198,6 +212,16 @@ def test_openai_adapter_uses_strict_contract_and_preserves_usage(settings):
     turn = OpenAIModel(settings, client).complete(
         "research", [{"role": "user", "content": "test"}], [], ResearchSummary
     )
-    assert turn.result.material_gaps == ["missing"] and turn.usage["total_tokens"] == 30
+    assert [g.description for g in turn.result.material_gaps] == ["missing"]
+    assert turn.usage["total_tokens"] == 30
     arguments = client.responses.create.call_args.kwargs
     assert arguments["store"] is False and arguments["text"]["format"]["strict"]
+    # Provider default reasoning unless configured per role.
+    assert "reasoning" not in arguments
+    tuned = settings.model_copy(
+        update={"pm_reasoning_effort": "high", "research_reasoning_effort": "low"}
+    )
+    OpenAIModel(tuned, client).complete("portfolio_manager", [], [], ResearchSummary)
+    assert client.responses.create.call_args.kwargs["reasoning"] == {"effort": "high"}
+    OpenAIModel(tuned, client).complete("bull", [], [], ResearchSummary)
+    assert client.responses.create.call_args.kwargs["reasoning"] == {"effort": "low"}

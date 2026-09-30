@@ -7,8 +7,34 @@ from pydantic import BaseModel
 
 from app.adapters.http import ToolError
 from app.config import Settings
-from app.models import Claim, PortfolioDecision, ResearchSummary, StageReview
+from app.models import (
+    ACTION_LABELS,
+    Claim,
+    MaterialGap,
+    PortfolioDecision,
+    ResearchManagerReview,
+    ResearchSummary,
+    StageReview,
+    TriageDecision,
+)
 from app.tools import strict_schema
+
+
+def decision_contract() -> str:
+    """Render the deterministic decision matrix so the model sees the rules it is held to."""
+    from app.validation import DECISION_MATRIX
+
+    lines = []
+    for rating, (entries, holders, states) in DECISION_MATRIX.items():
+        lines.append(
+            f"- {rating.value}: new_entry_action in "
+            + ", ".join(f"{a.value}({ACTION_LABELS[a]})" for a in sorted(entries))
+            + "; holder_action in "
+            + ", ".join(f"{a.value}({ACTION_LABELS[a]})" for a in sorted(holders))
+            + "; thesis_state in "
+            + ", ".join(sorted(states))
+        )
+    return "\n".join(lines)
 
 
 def policy_prompt() -> str:
@@ -39,6 +65,31 @@ targets use calculate with explicit assumptions. Risk sizing requires actual por
 risk inputs. Do not invent risk tolerance, NAV, size, consensus, dates or missing observations.
 TradePlan.conditions are outstanding entry requirements; keep them until verified by evidence.
 When a price enters the range, review these requirements and cite findings before clearing them.
+A qualitative FACT must carry quotes: exact spans copied from the cited evidence text (at least 12
+characters, or a whole structured field value). Use evidence_read to locate the span.
+The context holds a compact evidence index and snippets, not full documents. Read what you rely on.
+Material gaps carry severity. Only the research manager (with evidence_sufficient) and the portfolio
+manager make a gap binding: any blocking gap requires 판단 보류, and 판단 보류 must name one. Other
+stages propose severity in open_gaps; the portfolio manager restates each gap it keeps.
+Missing personal inputs (portfolio value, loss limit, horizon, fund look-through exposure) prevent
+a quantity or position size, not a rating: keep them non_blocking and omit the quantity.
+Every tradeable rating needs at least one evidence-backed thesis claim. Rating, actions and thesis
+state must match this contract (validated deterministically):
+"""
+        + decision_contract()
+        + """
+A long TradePlan requires an entry action (ENTER_NOW, CONDITIONAL_ENTRY, STAGED_ENTRY) or ADD.
+ENTER_NOW/STAGED_ENTRY need the fresh price inside the entry range; otherwise use CONDITIONAL_ENTRY.
+When the account evidence shows the position is held, provide position_guard unless holder_action
+is EXIT: a stop below the current price and optional take_profit levels above it, each equal to an
+evidence fact in USD/share (e.g. sma200, recent_low, low_52w, or a calculate result such as
+recent_low minus an ATR multiple). The monitor alerts when a regular-session price crosses them.
+A guard may accompany 판단 보류; it protects the holding, it is not a new trade.
+Notes (new_entry_note, holder_note) stay qualitative. sizing_unit=fractional_amount means a USD
+market order by amount (no limit price); otherwise quantities are whole shares.
+For an ETF, research the index/methodology, expense ratio (summary prospectus), holdings
+concentration, sector/country exposure, liquidity and tracking. fund_holdings_read is the official
+holdings basis; issuer financial statements do not apply.
 Every perspective can call tools. Keep outputs concise and in Korean. Do not disclose private reasoning;
 return findings, evidence, counterarguments and unresolved questions only.
 """
@@ -76,10 +127,20 @@ class OpenAIModel:
             api_key=settings.openai_api_key.get_secret_value(), timeout=120, max_retries=2
         )
 
+    def route(self, role):
+        settings = self.settings
+        if role == "portfolio_manager":
+            return settings.pm_model, settings.pm_reasoning_effort
+        if role == "triage":
+            return (
+                settings.triage_model or settings.research_model,
+                settings.triage_reasoning_effort,
+            )
+        return settings.research_model, settings.research_reasoning_effort
+
     def complete(self, role, messages, tools, schema):
-        model = (
-            self.settings.pm_model if role == "portfolio_manager" else self.settings.research_model
-        )
+        model, effort = self.route(role)
+        options = {"reasoning": {"effort": effort}} if effort else {}
         try:
             response = self.client.responses.create(
                 model=model,
@@ -96,6 +157,7 @@ class OpenAIModel:
                         "schema": strict_schema(schema),
                     }
                 },
+                **options,
             )
         except Exception as error:
             # SDK request/error objects may contain API keys or account data.
@@ -108,17 +170,16 @@ class OpenAIModel:
             if item.type == "function_call"
         ]
         usage = response.usage.model_dump() if response.usage else {}
+        usage = {"model": model, "reasoning_effort": effort, **usage}
         if calls:
             return ModelTurn(
                 calls=calls,
                 continuation=[item.model_dump(exclude_none=True) for item in response.output],
-                usage={"model": model, **usage},
+                usage=usage,
             )
         if not response.output_text:
             raise ToolError("MODEL_REFUSAL_OR_EMPTY")
-        return ModelTurn(
-            result=schema.model_validate_json(response.output_text), usage={"model": model, **usage}
-        )
+        return ModelTurn(result=schema.model_validate_json(response.output_text), usage=usage)
 
 
 class FixtureModel:
@@ -131,6 +192,14 @@ class FixtureModel:
         context = json.loads(messages[1]["content"])
         records = context["evidence"]
         ids = [r["evidence_id"] for r in records if r["usable_as_fact"]]
+        if schema is TriageDecision:
+            return ModelTurn(
+                result=TriageDecision(
+                    priority="deep_research",
+                    reasons=["합성 스크리닝 지표를 심층 조사 대상으로 분류"],
+                    evidence_ids=ids[:1],
+                )
+            )
         claim = Claim(
             classification="INTERPRETATION",
             text="합성 fixture의 사업 근거와 위험을 함께 검토했다.",
@@ -140,7 +209,7 @@ class FixtureModel:
         )
         if schema is ResearchSummary:
             # Exercise actual tool orchestration rather than a fixture-only shortcut.
-            if not any(r["evidence_type"] == "search" for r in records):
+            if tools and not any(r["evidence_type"] == "search" for r in records):
                 return ModelTurn(
                     calls=[
                         FunctionCall(
@@ -150,7 +219,7 @@ class FixtureModel:
                         )
                     ]
                 )
-            if not any(r["evidence_type"] == "document" for r in records):
+            if tools and not any(r["evidence_type"] == "document" for r in records):
                 return ModelTurn(
                     calls=[
                         FunctionCall(
@@ -182,32 +251,40 @@ class FixtureModel:
                     evidence_sufficient=True,
                 )
             )
-        if schema is StageReview:
-            return ModelTurn(
-                result=StageReview(
-                    claims=[claim],
-                    arguments=["합성 근거를 검토한다."],
-                    rebuttals=["상대 논지의 위험을 함께 검토한다."],
-                    early_warnings=["새로운 공식 자료가 기존 가정을 반박하는지 확인한다."],
-                    material_gaps=[],
-                )
-            )
-        rating = {"bullish": "Buy", "bearish": "Sell", "missing": "판단 보류"}.get(
-            self.scenario, "Hold"
-        )
+        if schema in (StageReview, ResearchManagerReview):
+            review = {
+                "claims": [claim],
+                "arguments": ["합성 근거를 검토한다."],
+                "rebuttals": ["상대 논지의 위험을 함께 검토한다."],
+                "early_warnings": ["새로운 공식 자료가 기존 가정을 반박하는지 확인한다."],
+                "material_gaps": [],
+            }
+            if schema is ResearchManagerReview:
+                review["evidence_sufficient"] = True
+            return ModelTurn(result=schema(**review))
+        # Each scripted scenario is one valid cell of the rating/action/thesis matrix.
+        rating, new_entry, holder, thesis_state = {
+            "bullish": ("Buy", "ENTER_NOW", "ADD", "ACTIVE"),
+            "bearish": ("Sell", "AVOID", "EXIT", "INVALIDATED"),
+            "missing": ("판단 보류", "DEFER", "DEFER", "UNKNOWN"),
+        }.get(self.scenario, ("Hold", "WAIT", "HOLD", "ACTIVE"))
         return ModelTurn(
             result=PortfolioDecision(
                 rating=rating,
                 confidence="중간",
-                new_entry_action="추가 자료 확인 후 진입 검토",
-                holder_action="공식 자료 변화에 따라 재평가",
+                new_entry_action=new_entry,
+                new_entry_note="합성 자료 기준 행동",
+                holder_action=holder,
+                holder_note="공식 자료 변화에 따라 재평가",
                 executive_summary="합성 fixture 실행 결과이며 실제 투자 판단으로 사용할 수 없다.",
                 thesis=[claim],
-                thesis_state="INVALIDATED" if self.scenario == "bearish" else "ACTIVE",
+                thesis_state=thesis_state,
                 invalidation_conditions=["공식 자료가 투자 가정을 반박할 경우"],
                 monitoring_checklist=["공시와 가격 기준 갱신"],
                 material_changes=[],
-                material_gaps=["핵심 자료 없음"] if self.scenario == "missing" else [],
+                material_gaps=[MaterialGap(description="핵심 자료 없음", severity="blocking")]
+                if self.scenario == "missing"
+                else [],
                 trade_plan=None,
             )
         )

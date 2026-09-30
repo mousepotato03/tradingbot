@@ -71,12 +71,14 @@ class Transport:
             return response
         raise ToolError("UPSTREAM_UNAVAILABLE", True)
 
-    def public_get(self, url, *, max_bytes=10_000_000):
+    def public_get(self, url, *, max_bytes=10_000_000, headers_for=None):
+        """GET a public URL. `headers_for(url)` supplies per-host headers on every redirect hop."""
         # Production egress proxy additionally enforces destination IPs after DNS resolution.
         for _ in range(6):
             public_url(url)
             try:
-                with self.client.stream("GET", url) as response:
+                headers = headers_for(url) if headers_for else None
+                with self.client.stream("GET", url, headers=headers) as response:
                     if response.is_redirect:
                         url = urljoin(url, response.headers["location"])
                         continue

@@ -25,25 +25,45 @@ def serve(settings: Settings | None = None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     def background():
-        next_discovery, next_evaluation = 0, 0
         while not stopped.is_set():
             settings.artifact_dir.parent.mkdir(parents=True, exist_ok=True)
             (settings.artifact_dir.parent / "worker-heartbeat").touch()
             try:
                 monitor.tick()
                 notifier.flush()
-                if settings.discovery_enabled and time.monotonic() >= next_discovery:
-                    Discovery(engine).scan()
-                    next_discovery = time.monotonic() + 86400
-                if time.monotonic() >= next_evaluation:
-                    OutcomeTracker(engine).update()
-                    next_evaluation = time.monotonic() + 86400
             except Exception as error:
                 logging.error("Scheduler operation failed error_class=%s", type(error).__name__)
             stopped.wait(10)
 
+    def maintenance():
+        # Discovery triage (model calls) and outcome refresh are slow; keep them off the
+        # condition-monitoring loop so entry/stop checks stay on schedule.
+        due = {"discovery": 0.0, "evaluation": 0.0}
+        jobs = {
+            "discovery": lambda: Discovery(engine).scan(),
+            "evaluation": lambda: OutcomeTracker(engine).update(),
+        }
+        while not stopped.is_set():
+            for name, job in jobs.items():
+                if name == "discovery" and not settings.discovery_enabled:
+                    continue
+                if time.monotonic() < due[name]:
+                    continue
+                try:
+                    job()
+                    due[name] = time.monotonic() + 86400
+                except Exception as error:
+                    # Retry failed daily jobs hourly rather than on every loop.
+                    due[name] = time.monotonic() + 3600
+                    logging.error(
+                        "Maintenance %s failed error_class=%s", name, type(error).__name__
+                    )
+            stopped.wait(60)
+
     scheduler = threading.Thread(target=background, daemon=True)
     scheduler.start()
+    slow = threading.Thread(target=maintenance, daemon=True)
+    slow.start()
     while not stopped.is_set():
         try:
             run_id = store.claim_job(settings.worker_lease_seconds)
@@ -54,6 +74,7 @@ def serve(settings: Settings | None = None):
             logging.error("Worker operation failed error_class=%s", type(error).__name__)
         stopped.wait(2)
     scheduler.join(timeout=30)
+    slow.join(timeout=30)
 
 
 if __name__ == "__main__":

@@ -198,7 +198,7 @@ Owns:
 - storage
 - background monitoring, discovery, notification outbox and evaluation
 
-One worker owns the Toss token and serializes authentication/requests. This avoids invalidating another process's token. A scheduler thread runs alongside research so long model calls do not suspend condition checks. Persistent jobs/checkpoints survive process restart; startup recovery assumes the previous sole worker has stopped.
+One worker owns the Toss token and serializes token issuance. This avoids invalidating another process's token. Requests are paced per Toss rate-limit group (for example `MARKET_DATA`, `MARKET_DATA_CHART`, `ACCOUNT`, `ORDER_INFO`) by token buckets seeded from the documented limits and updated from `X-RateLimit-*` headers, so a chart or account call does not delay quotes. A scheduler thread runs condition checks alongside research; a separate maintenance thread runs discovery triage and outcome refresh so slow model or history calls never delay entry/stop checks. Persistent jobs/checkpoints survive process restart; startup recovery assumes the previous sole worker has stopped.
 
 ### browser-worker
 
@@ -220,6 +220,7 @@ Security:
 - strict network/time/resource limits where practical
 - private destinations rejected by both URL validation and an egress proxy
 - read-only non-root container; no core database network membership
+- read-only browsing: only GET/HEAD leave the page. POST is blocked unless the exact hostname is in `BROWSER_POST_ALLOWED_HOSTS` (empty by default); PUT/PATCH/DELETE and WebSockets are always blocked. Blocked requests are reported in each observation so prompt-injected form submissions are visible and inert.
 
 ### database
 
@@ -294,12 +295,17 @@ FACT must have evidence.
 
 - rating
 - confidence
-- new_entry_action
-- holder_action
+- new_entry_action (enum) and qualitative note
+- holder_action (enum) and qualitative note
 - thesis
+- thesis_state
 - invalidation_conditions
 - monitoring_checklist
+- material_gaps with `blocking` / `non_blocking` severity
+- position_guard for a held position: evidence-backed stop and take-profit levels the monitor watches
 - evidence_ids
+
+The allowed rating × action × thesis-state × plan combinations are defined in [Investment Policy](INVESTMENT_POLICY.md#decision-contract) and enforced by the validator.
 
 ### TradePlan
 
@@ -363,7 +369,7 @@ Suggested initial modes:
 
 These are ceilings, not targets.
 
-v0.1 also bounds model calls, elapsed time and recorded total token usage. Checks run at call boundaries; see [runtime limits](RUNTIME.md#6-조사-예산과-근거-한계). All perspectives retain tool access. Budget exhaustion becomes 판단 보류, never a default Hold.
+Tool budgets count model-requested calls; the fixed baseline collection is recorded but not counted. Using up the tool budget removes tools, and the remaining stages conclude from the evidence already gathered. Elapsed time, cost-weighted tokens (cached input at 10%) and model calls are hard limits: exhausting one becomes 판단 보류, never a default Hold. Checks run at call boundaries; see [runtime limits](RUNTIME.md#6-조사-예산과-근거-한계).
 
 Use deep/critical for:
 
@@ -399,7 +405,13 @@ portfolio manager
 
 The model provider must remain behind an interface so models can change without rewriting orchestration.
 
-v0.1 uses two explicitly configured model IDs: research/review and portfolio manager. Official-universe discovery rotates a configured batch into research without a current-price entry gate. A cheap-model classification stage is not implemented yet.
+The implementation uses three configurable model IDs (research/review, portfolio manager and an optional cheaper triage model that falls back to the research model), each with an optional reasoning-effort setting; unset means the provider default.
+
+Discovery follows the routing above:
+
+1. **Deterministic screen.** The official Toss universe (equity types in `discovery_security_types`; depositary receipts and ETFs excluded by default) is ordered by the one-month market trading-amount ranking, then in stable rotation. For up to `discovery_screen_limit` names, completed daily OHLCV and Toss shares outstanding give price, 20-day dollar volume, market cap, SMA50/200 and 63-session return. Price, liquidity, size and data sufficiency are gates. Trend and relative strength only rank; the current price relative to an entry range is never a screen. Each screen is stored as a `screening` evidence record.
+2. **Cheap triage.** One structured model call per ranked candidate returns `deep_research`, `watch_later` or `skip`, citing the screening evidence. It is not a rating.
+3. **Deep research.** Only `deep_research` candidates are queued as deep runs, up to the batch. Screen failures and non-deep triage are remembered for `discovery_rescreen_days`.
 
 ## 9. State diffing
 
@@ -420,6 +432,14 @@ Persist fields that enable meaningful diffs:
 
 Discord should report the diff, not merely the latest snapshot.
 
+A completed report's evidence ledger is immutable. The monitor writes quotes, account snapshots and discovery screens to a separate `monitor_observations` table, so a report can always be audited against exactly the evidence it was written from. Each tick reads all due quotes in one `/prices` batch (200 symbols per call, one market calendar) and one shared account snapshot per interval; position changes are attributed only to the ticker whose quantity changed.
+
+Routine re-research runs once per trading day shortly after the US regular open (Toss market calendar; weekends and holidays skipped), when fresh regular-session quotes can validate levels. Price-level checks use regular-session prices only; a closed market is not a data failure, and a breach already signalled is not re-sent at the next open.
+
+USD positions found in the account snapshot are watched automatically. A new holding gets a first research run as `기존 보유` in `holding_research_mode` (default `quick`, because every watch is re-researched daily). The account decides the investor status of every follow-up: a held position is researched as `기존 보유` and a fully sold one as `신규 진입 검토`, unless the request said `일부 매도 검토`.
+
+Re-research inherits the investor's conditions. The request that created a watch (risk inputs, horizon, investor status, question, mode, report policy) is stored with it; monitor-triggered runs reuse it, escalate to `critical` on invalidation, and carry a `trigger` that states what changed since the previous report.
+
 ## 10. Failure modes
 
 The system must fail explicitly.
@@ -438,6 +458,6 @@ Never silently fill missing evidence with guessed numbers.
 
 ## 11. v0.1 deployment and migration impact
 
-The rationale for the initial service split is token ownership and browser isolation. Brave is the search adapter; native OpenAI Responses tools provide autonomous research while direct HTML/PDF reads precede Chromium fallback. Screenshot-coordinate operations are ordinary restricted browser tools, without a model-accessible shell.
+The rationale for the initial service split is token ownership and browser isolation. Tavily is the default search adapter and Brave is selectable; native OpenAI Responses tools provide autonomous research while direct HTML/PDF reads precede Chromium fallback. Screenshot-coordinate operations are ordinary restricted browser tools, without a model-accessible shell.
 
-There is no dependency on TradingAgents or its decision graph. Initial migration `0001` creates a new database. Old recommendation history must be separately imported and marked as legacy if that work is authorized later. Current fixture reports are clearly synthetic and cannot emit live notifications. See [runtime and operations](RUNTIME.md) for credentials, backup, limits and live acceptance checks.
+There is no dependency on TradingAgents or its decision graph. Initial migration `0001` creates a new database. Migration `0002` adds `monitor_observations` and `outcomes.mature`; reports written before the action enums and gap severity load unchanged through model-level coercion (free-text actions become `DEFER` with the original text kept as a marked note; old PM gaps become blocking, old stage gaps advisory). They are not re-validated on load. Old recommendation history must be separately imported and marked as legacy if that work is authorized later. Current fixture reports are clearly synthetic and cannot emit live notifications. See [runtime and operations](RUNTIME.md) for credentials, backup, limits and live acceptance checks.

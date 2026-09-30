@@ -79,3 +79,85 @@ def test_actual_chromium_dynamic_page_coordinates_tabs_and_screenshot(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_browser_is_read_only_posts_and_websockets_never_leave(tmp_path):
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            received.append(("GET", self.path))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><title>Forms</title><body>"
+                b'<form method="post" action="/submit"><input name="q" aria-label="Post field">'
+                b'<button type="submit">Send post</button></form>'
+                b'<form method="get" action="/search"><input name="q" aria-label="Search field">'
+                b'<button type="submit">Search</button></form>'
+                b"<script>try{new WebSocket('ws://'+location.host+'/ws')}catch(e){}</script>"
+                b"</body></html>"
+            )
+
+        def do_POST(self):
+            received.append(("POST", self.path))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    async def verify():
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            runtime = BrowserRuntime(
+                browser, allow_test_network=True, downloads=tmp_path, post_hosts=frozenset()
+            )
+            observation = await runtime.open(
+                OpenInput(session_id="ro", url=f"http://127.0.0.1:{server.server_port}/")
+            )
+            ref = {e["label"]: e["ref"] for e in observation["elements"]}
+            await runtime.action(
+                ActionInput(session_id="ro", action="type", ref=ref["Post field"], text="x")
+            )
+            observation = await runtime.action(
+                ActionInput(session_id="ro", action="click", ref=ref["Send post"])
+            )
+            await asyncio.sleep(0.3)
+            blocked = {(b["method"], b["url"].split("/")[-1]) for b in runtime.blocked["ro"]}
+            assert ("POST", "submit") in blocked
+            assert any(b["method"] == "WEBSOCKET" for b in runtime.blocked["ro"])
+            assert observation["blocked_requests"]
+            observation = await runtime.open(
+                OpenInput(session_id="ro", url=f"http://127.0.0.1:{server.server_port}/")
+            )
+            ref = {e["label"]: e["ref"] for e in observation["elements"]}
+            await runtime.action(
+                ActionInput(session_id="ro", action="type", ref=ref["Search field"], text="10-K")
+            )
+            await runtime.action(ActionInput(session_id="ro", action="click", ref=ref["Search"]))
+            await asyncio.sleep(0.3)
+            await runtime.close("ro")
+            await browser.close()
+
+    try:
+        asyncio.run(verify())
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert not any(method == "POST" for method, _ in received)
+    assert ("GET", "/search?q=10-K") in received
+
+
+def test_post_allowlist_is_exact_host_and_never_other_writes():
+    runtime = BrowserRuntime(None, post_hosts=frozenset({"efts.sec.gov"}))
+    assert runtime.method_allowed("GET", "https://example.com/")
+    assert runtime.method_allowed("POST", "https://efts.sec.gov/LATEST/search-index")
+    assert not runtime.method_allowed("POST", "https://evil.efts.sec.gov.example.com/")
+    assert not runtime.method_allowed("PUT", "https://efts.sec.gov/")
+    assert not runtime.method_allowed("DELETE", "https://efts.sec.gov/")

@@ -52,6 +52,15 @@ def test_rr_and_sizing_include_costs_and_existing_exposure():
     )
 
 
+def test_sizing_floors_to_the_broker_quantity_step():
+    args = (D(1000), D(".01"), D(100), D(90), D(10000), D(".20"))
+    assert position_size(*args) == 1  # 10 / 10 = 1 whole share
+    assert position_size(*args, fee=D(".001")) == 0  # below one whole share
+    assert position_size(*args, fee=D(".001"), lot_step=D("0.000001")) == D("0.981354")
+    with pytest.raises(ValueError):
+        position_size(*args, lot_step=D(0))
+
+
 def test_analytics_reject_bad_inputs():
     with pytest.raises(ValueError):
         sma([1, float("nan")], 2)

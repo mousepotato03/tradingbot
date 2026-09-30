@@ -2,8 +2,8 @@ from datetime import timedelta
 from decimal import Decimal
 
 from app.evidence import content_hash, evidence_is_fresh
+from app.models import ACTION_LABELS, EvidenceRecord, ResearchReport
 from app.models import CandidateState as State
-from app.models import EvidenceRecord, ResearchReport
 
 ALLOWED = {
     State.UNIVERSE: {State.RESEARCH, State.ACTIVE},
@@ -72,6 +72,20 @@ def candidate_state(
     return State.WATCH
 
 
+def guard_of(report: ResearchReport):
+    """The monitored holding guard, if the report's decision validated."""
+    return report.decision.position_guard if report.validation.valid else None
+
+
+def guard_line(report: ResearchReport) -> str:
+    guard = guard_of(report)
+    if guard is None:
+        return ""
+    targets = ", ".join(str(level.value) for level in guard.take_profit)
+    line = f"손절선: {guard.stop.value} {guard.currency}"
+    return line + (f" · 익절 검토: {targets}" if targets else "") + "\n"
+
+
 def changes(
     previous: ResearchReport | None,
     current: ResearchReport,
@@ -94,9 +108,22 @@ def changes(
         ]:
             if old != new:
                 differences.append((name, label, f"{old} → {new}"))
+        # A holding gaining or losing its monitored stop matters; daily level drift does not.
+        old_guard, new_guard = guard_of(previous), guard_of(current)
+        if (old_guard is None) != (new_guard is None):
+            differences.append(
+                (
+                    "POSITION_GUARD",
+                    "보유 손절선",
+                    f"{new_guard.stop.value} {new_guard.currency} 감시 시작"
+                    if new_guard
+                    else "감시 해제",
+                )
+            )
+        # Only binding gaps change what the system can decide; advisory gaps are report detail.
         old_gaps, new_gaps = (
-            set(previous.decision.material_gaps),
-            set(current.decision.material_gaps),
+            {gap.description for gap in previous.decision.blocking_gaps()},
+            {gap.description for gap in current.decision.blocking_gaps()},
         )
         if old_gaps != new_gaps:
             differences.append(
@@ -142,8 +169,10 @@ def changes(
             "ticker": current.ticker,
             "kind": kind,
             "content": f"{'[FIXTURE] ' if current.fixture else ''}{current.ticker} · {label}: {value}\n"
-            f"신규: {current.decision.new_entry_action}\n보유: {current.decision.holder_action}\n"
-            f"{current.decision.executive_summary}",
+            f"신규: {ACTION_LABELS[current.decision.new_entry_action]}\n"
+            f"보유: {ACTION_LABELS[current.decision.holder_action]}\n"
+            + guard_line(current)
+            + current.decision.executive_summary,
         }
         for kind, label, value in differences
     ]

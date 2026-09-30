@@ -28,6 +28,9 @@ def main():
     report.add_argument("run_id")
     watch = sub.add_parser("watch")
     watch.add_argument("ticker")
+    watch.add_argument(
+        "--request", type=Path, help="JSON request whose conditions later re-research inherits"
+    )
     sub.add_parser("doctor")
     sub.add_parser("evaluate")
     discovery = sub.add_parser("discover")
@@ -55,7 +58,14 @@ def main():
     elif args.command == "report":
         print(markdown(store.get_report(args.run_id), store.evidence(args.run_id)))
     elif args.command == "watch":
-        Monitor(ResearchEngine(settings, store)).watch(args.ticker)
+        request = (
+            ResearchRequest.model_validate_json(args.request.read_text(encoding="utf-8"))
+            if args.request
+            else None
+        )
+        if request and request.ticker != args.ticker.upper():
+            parser.error("Ticker and request JSON disagree")
+        Monitor(ResearchEngine(settings, store)).watch(args.ticker, request)
         print("Scheduled " + args.ticker.upper())
     elif args.command == "discover":
         from app.discovery import Discovery

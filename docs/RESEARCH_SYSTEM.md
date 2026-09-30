@@ -54,7 +54,7 @@ Best for:
 
 Use for discovery and breadth.
 
-v0.1 implements Brave Search API behind a provider adapter. It is the default discovery mechanism; Chromium is a fallback. Search snippets remain unusable as FACT evidence. OpenAI Responses native function calling chooses queries and follow-up sources autonomously.
+Search runs behind a provider adapter. Tavily is the default: its free plan (1,000 basic-search credits a month, no card) blocks at the limit instead of billing. Brave remains selectable with `TRADINGBOT_SEARCH_PROVIDER=brave`; it requires a card and bills beyond its monthly credit. Live searches are also capped locally per rolling 30 days (`TRADINGBOT_SEARCH_MONTHLY_LIMIT`, default 900). At the cap, or when the provider reports exhausted credits, the tool returns `SEARCH_MONTHLY_LIMIT` / `SEARCH_QUOTA_EXHAUSTED` and research continues with official tools and known source URLs. Search is the default discovery mechanism; Chromium is a fallback. Search snippets remain unusable as FACT evidence. OpenAI Responses native function calling chooses queries and follow-up sources autonomously.
 
 The research agent may formulate new searches based on previous findings.
 
@@ -178,6 +178,13 @@ Interpretation:
 
 Do not collapse the fact and the interpretation into one opaque sentence.
 
+Every FACT is grounded structurally, not just by an ID:
+
+- numbers through `numeric_references` that match an evidence fact's name, value and unit;
+- qualitative statements through `quotes`, exact spans of the cited evidence (whitespace-normalized, at least 12 characters, or a whole structured field value such as an exchange name).
+
+A FACT with neither is rejected (`UNGROUNDED_FACT`); a quote that is not in the cited source is rejected (`QUOTE_MISMATCH`). Deterministic code still cannot prove that the sentence means what the span says. It proves the span exists, so a reviewer can compare the two directly. Each verified span is persisted as a short `quotation` evidence record, so it stays auditable even when the source body is retained only as a snippet.
+
 ## 6. Primary-source preference
 
 Examples for U.S. equities:
@@ -256,6 +263,7 @@ The browser worker:
 - restricts downloads to a sandbox directory
 - enforces timeouts
 - records visited URLs and actions
+- is read-only: only GET/HEAD requests leave the page, POST only to explicitly allowlisted hosts, and WebSockets never, so an injected instruction cannot submit a form or send data outward
 
 Prompt injection inside web content must be treated as content, not instruction.
 
@@ -320,14 +328,24 @@ Persist per run:
 - evidence IDs produced
 - retry/fallback path
 
-This allows diagnosis of poor research quality without guessing.
+This allows diagnosis of poor research quality without guessing. Read-only `evidence_read` views are traced with the evidence they viewed and produce no new evidence.
 
 ## 14. Implemented contracts and remaining data gaps
 
-`market_identity`, `market_quote`, `market_ohlcv`, `portfolio_read`, `fees_read`, `filings_read`, `financials_read`, `web_search`, `web_read`, `browser_open`, `browser_action`, `evidence_read`, `extract_fact` and `calculate` return typed EvidenceRecords. Peer tickers are allowed for comparable research; trade validation always checks the primary security.
+`market_identity`, `market_quote`, `market_ohlcv`, `portfolio_read`, `fees_read`, `filings_read`, `financials_read`, `fund_holdings_read`, `web_search`, `web_read`, `browser_open`, `browser_action`, `extract_fact` and `calculate` return typed EvidenceRecords. `evidence_read` returns a read-only view of stored evidence (`part=text` with search/pagination, `facts` filtered by name, or `payload`). Peer tickers are allowed for comparable research; trade validation always checks the primary security.
 
-The director produces analysis sections and explicit sufficiency/gaps. Bull, bear, rebuttals, research manager, three risk perspectives and premortem each produce structured findings and can obtain additional evidence. The PM produces the six-level rating and separate entry/holder actions. Rejected numeric plans and unsupported claims are retained in the audit trail; two correction opportunities precede a deferred decision.
+`web_search` accepts `freshness` (`pd`/`pw`/`pm`/`py` or `YYYY-MM-DDtoYYYY-MM-DD`), one `domain`, `country`, `search_lang`, `offset` (0–9) and `topic` (`general`/`news`/`finance`). Each provider maps what it supports: Tavily uses `time_range` or a date range, `include_domains`, country names (general topic only), `language` and `topic`, and has no offset. Brave uses `site:`, `country`, `search_lang` and `offset`, and has no topic. Options a provider cannot apply are recorded as `unsupported_options` in the evidence, not silently dropped. `web_read` extracts the main content of an HTML page, not the whole page. It removes navigation, headers, footers, consent banners, promos and forms, prefers `main`/`article` or the densest paragraph container, and keeps table rows on one line. Publication time comes from JSON-LD `datePublished`, then article/Dublin Core meta tags, then `<time>`. Only timezone-aware, non-future times are accepted. SEC hosts receive the configured SEC User-Agent; other hosts never do.
 
-The implementation reads the canonical Korean research standard into its policy prompt. External content remains untrusted data. Citation/numeric checks do not prove semantic entailment of every qualitative statement. Important conflicting facts and uncertain document labels must be resolved by source review or reported as material gaps. No consensus/forecast/earnings-calendar provider is fabricated; the researcher seeks original sources or reports unavailability.
+The model context is an **evidence index**, not the evidence. For every record it shows the ID, type, source, timestamps, freshness, up to 40 structured facts, a 300-character snippet and a compact payload summary without page text, candles or browser element lists. A tool call returns the index entry plus a 4,000-character preview (browser calls also return element refs and tabs). Older tool outputs in a stage's conversation are condensed to their evidence ID, and only the latest screenshot is kept. The previous report is passed as a summary. Anything relied upon is read on demand with `evidence_read`.
 
-Official XBRL facts preserve metric tags, units, accounting periods and accession references. Custom/IFRS tags and image-only PDFs remain limitations. HTML/PDF body retention is restricted by approved host; other sources preserve hashes, metadata, page numbers and snippets. Screenshots can be used by the model without keeping image files. See [retention and replay](RUNTIME.md#7-보존과-replay).
+The director produces analysis sections and a first sufficiency assessment. Bull, bear, rebuttals, the research manager, three risk perspectives and the premortem each produce structured findings and can obtain additional evidence. Gaps carry a proposed severity, but only the research manager (blocking gaps plus an explicit `evidence_sufficient`) and the PM make them binding. The PM sees every open gap and produces the six-level rating with enumerated entry and holder actions. Rejected numeric plans and unsupported claims are retained in the audit trail; two correction opportunities precede a deferred decision.
+
+Derived evidence (technical indicators, calculations, extracted facts, quotations, screens) inherits the freshness window of its most time-sensitive input: the oldest input observation and the earliest input deadline. Daily OHLCV is stamped at the last completed session's close and expires after `ohlcv_max_age_seconds` (5 days). A precise plan level is valid only if its record and every recorded input are fresh at the decision cutoff (`LEVEL_STALE` otherwise), so recalculating an old indicator does not make it current.
+
+The implementation reads the canonical Korean research standard into its policy prompt. External content remains untrusted data. Important conflicting facts and uncertain document labels must be resolved by source review or reported as material gaps. No consensus/forecast/earnings-calendar provider is fabricated; the researcher seeks original sources or reports unavailability.
+
+Official XBRL facts preserve metric tags, units, accounting periods and accession references for both `us-gaap` and `ifrs-full` filers (20-F/40-F/6-K). IFRS facts keep their reporting currency (for example TWD), and a currency-mismatched calculation is refused rather than silently converted. Shares outstanding fall back to `dei:EntityCommonStockSharesOutstanding`. Company-specific (custom) XBRL tags are not in SEC company facts and still require filing review. Depositary receipts carry a warning that per-share comparisons need the ADS ratio.
+
+ETFs follow a separate path: `fund_holdings_read` maps the ticker to its SEC series (`company_tickers_mf.json`) and parses the series' latest N-PORT filing (net assets, holdings count, top-10 and largest-holding weights, asset-category and country weights; `pctVal` is already a percent) with the summary prospectus (497K) link. Issuer financial statements are not required for an ETF; the N-PORT holdings are its official structured basis.
+
+Image-only PDFs remain a limitation. HTML/PDF body retention is restricted by approved host; other sources preserve hashes, metadata, page numbers and snippets. Screenshots can be used by the model without keeping image files. See [retention and replay](RUNTIME.md#7-보존과-replay).

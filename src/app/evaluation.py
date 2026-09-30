@@ -57,12 +57,26 @@ class OutcomeTracker:
         from app.models import utcnow
         from app.storage import OutcomeRow, ReportRow
 
+        # Settled reports (all windows observed, or nothing to evaluate) are never reloaded.
         with self.store.transaction() as session:
-            reports = [(row.id, dict(row.body)) for row in session.scalars(select(ReportRow)).all()]
+            settled = select(OutcomeRow.report_id).where(OutcomeRow.mature.is_(True))
+            reports = [
+                (row.id, dict(row.body))
+                for row in session.scalars(select(ReportRow).where(ReportRow.id.not_in(settled)))
+            ]
         updated = 0
         cache = {}
         for report_id, report in reports:
             if report["decision"]["rating"] == "판단 보류":
+                with self.store.transaction() as session:
+                    session.merge(
+                        OutcomeRow(
+                            id=report_id + ":forward",
+                            report_id=report_id,
+                            body={"skipped": "판단 보류 carries no directional decision"},
+                            mature=True,
+                        )
+                    )
                 continue
             bars = []
             for ticker in (report["ticker"], self.engine.settings.benchmark_ticker):
@@ -101,7 +115,14 @@ class OutcomeTracker:
                 "source_hashes": [r.content_hash for r in bars],
                 "fixture": report["fixture"],
             }
+            # Reference session plus 60 forward sessions completes every tracked window.
+            mature = len(dates) >= 61
+            body["mature"] = mature
             with self.store.transaction() as session:
-                session.merge(OutcomeRow(id=report_id + ":forward", report_id=report_id, body=body))
+                session.merge(
+                    OutcomeRow(
+                        id=report_id + ":forward", report_id=report_id, body=body, mature=mature
+                    )
+                )
             updated += 1
         return updated

@@ -1,8 +1,21 @@
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text, create_engine, select, update
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    func,
+    inspect,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.evidence import persistent_record
@@ -79,6 +92,30 @@ class OutcomeRow(Base):
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     report_id: Mapped[str] = mapped_column(String(36), index=True)
     body: Mapped[dict] = mapped_column(JSON)
+    # All forward windows observed; the report is not re-fetched afterwards.
+    mature: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ObservationRow(Base):
+    """Monitor observations. Completed research evidence is never appended to."""
+
+    __tablename__ = "monitor_observations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(20), index=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    report_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    observed_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
+    body: Mapped[dict] = mapped_column(JSON)
+
+
+class SearchUsageRow(Base):
+    """One row per live web search, for the rolling provider quota."""
+
+    __tablename__ = "search_usage"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    provider: Mapped[str] = mapped_column(String(20))
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    used_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class WatchRow(Base):
@@ -103,6 +140,13 @@ class Store:
     def initialize(self):
         # Development/fixture convenience. Production uses Alembic migrations.
         Base.metadata.create_all(self.engine)
+        # create_all never alters existing tables; fixture DBs made before 0002 lack this column.
+        columns = {c["name"] for c in inspect(self.engine).get_columns("outcomes")}
+        if "mature" not in columns:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE outcomes ADD COLUMN mature BOOLEAN NOT NULL DEFAULT FALSE")
+                )
 
     @contextmanager
     def transaction(self):
@@ -192,6 +236,10 @@ class Store:
     def add_evidence(self, run_id: str, record: EvidenceRecord):
         record = persistent_record(record)
         with self.transaction() as session:
+            run = session.get(RunRow, run_id)
+            if run is not None and run.status == "COMPLETED":
+                # A completed report's evidence ledger is immutable; monitors use observations.
+                raise ValueError("Completed research evidence is immutable")
             session.add(
                 EvidenceRow(
                     id=record.evidence_id, run_id=run_id, body=record.model_dump(mode="json")
@@ -205,6 +253,47 @@ class Store:
                 [EvidenceRecord.model_validate(row.body) for row in rows],
                 key=lambda r: r.retrieved_at,
             )
+
+    def add_observation(
+        self, ticker: str, kind: str, record: EvidenceRecord, report_id: str | None = None
+    ):
+        record = persistent_record(record)
+        with self.transaction() as session:
+            session.add(
+                ObservationRow(
+                    id=record.evidence_id,
+                    ticker=ticker,
+                    kind=kind,
+                    report_id=report_id,
+                    observed_at=record.retrieved_at,
+                    body=record.model_dump(mode="json"),
+                )
+            )
+
+    def observations(self, ticker: str, kind: str | None = None) -> list[EvidenceRecord]:
+        with self.transaction() as session:
+            query = select(ObservationRow).where(ObservationRow.ticker == ticker)
+            if kind is not None:
+                query = query.where(ObservationRow.kind == kind)
+            rows = session.scalars(query.order_by(ObservationRow.observed_at)).all()
+            return [EvidenceRecord.model_validate(row.body) for row in rows]
+
+    def consume_search(self, provider: str, run_id: str | None, limit: int | None) -> bool:
+        """Record one search if the rolling 30-day count is below `limit`.
+
+        Counting before the call keeps the cap conservative: failed requests also count.
+        """
+        now = utcnow()
+        with self.transaction() as session:
+            used = session.scalar(
+                select(func.count())
+                .select_from(SearchUsageRow)
+                .where(SearchUsageRow.used_at > now - timedelta(days=30))
+            )
+            if limit is not None and used >= limit:
+                return False
+            session.add(SearchUsageRow(provider=provider, run_id=run_id, used_at=now))
+            return True
 
     def trace(self, run_id: str, body: dict):
         with self.transaction() as session:
@@ -230,7 +319,13 @@ class Store:
                 return None
             return ResearchReport.model_validate(session.get(ReportRow, state.report_id).body)
 
-    def commit_report(self, report: ResearchReport, markdown: str, events: list[dict]):
+    def commit_report(
+        self,
+        report: ResearchReport,
+        markdown: str,
+        events: list[dict],
+        next_research: datetime | None = None,
+    ):
         with self.transaction() as session:
             if session.get(ReportRow, report.run_id):
                 return
@@ -260,16 +355,25 @@ class Store:
                     )
                 )
                 watched = session.get(WatchRow, report.ticker)
+                # Re-research inherits the investor's conditions; monitor triggers do not replace them.
+                base = {
+                    key: value
+                    for key, value in run.request.items()
+                    if key not in {"as_of", "trigger"}
+                }
                 if watched is None:
                     session.add(
                         WatchRow(
                             ticker=report.ticker,
-                            next_research_at=utcnow() + timedelta(hours=24),
+                            next_research_at=next_research or utcnow() + timedelta(hours=24),
                             next_condition_at=utcnow() + timedelta(seconds=60),
+                            body={"base_request": base},
                         )
                     )
                 else:
-                    watched.next_research_at = utcnow() + timedelta(hours=24)
+                    watched.next_research_at = next_research or utcnow() + timedelta(hours=24)
+                    if not run.request.get("trigger") or "base_request" not in watched.body:
+                        watched.body = {**watched.body, "base_request": base}
                 for event in events:
                     if session.get(OutboxRow, event["id"]) is None:
                         session.add(OutboxRow(id=event["id"], body=event))

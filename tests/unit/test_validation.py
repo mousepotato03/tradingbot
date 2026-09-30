@@ -36,10 +36,19 @@ def setup_plan(quantity=None):
     decision = PortfolioDecision(
         rating="Buy",
         confidence="높음",
-        new_entry_action="진입 검토",
-        holder_action="추가 매수 검토",
+        new_entry_action="ENTER_NOW",
+        new_entry_note="검증된 진입 범위 안",
+        holder_action="ADD",
+        holder_note="추가 매수 검토",
         executive_summary="Verified scenario",
-        thesis=[],
+        thesis=[
+            {
+                "classification": "INTERPRETATION",
+                "text": "Verified levels support the setup",
+                "evidence_ids": [levels.evidence_id],
+                "confidence": "중간",
+            }
+        ],
         thesis_state="ACTIVE",
         invalidation_conditions=[],
         monitoring_checklist=[],

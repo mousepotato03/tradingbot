@@ -6,6 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -33,19 +34,43 @@ class ActionInput(SessionInput):
     amount: int | None = None
 
 
+READ_METHODS = {"GET", "HEAD"}
+
+
+def post_allowlist() -> frozenset[str]:
+    """Exact hostnames allowed to receive POST (e.g. a search form); empty by default."""
+    value = os.environ.get("BROWSER_POST_ALLOWED_HOSTS", "")
+    return frozenset(host.strip().lower() for host in value.split(",") if host.strip())
+
+
 class BrowserRuntime:
     def __init__(
-        self, browser, *, allow_test_network=False, downloads=Path("/tmp/browser-downloads")
+        self,
+        browser,
+        *,
+        allow_test_network=False,
+        downloads=Path("/tmp/browser-downloads"),
+        post_hosts: frozenset[str] | None = None,
     ):
         self.browser, self.allow_test_network, self.downloads = (
             browser,
             allow_test_network,
             downloads,
         )
+        self.post_hosts = post_allowlist() if post_hosts is None else post_hosts
         self.contexts, self.refs, self.accessed = {}, {}, {}
         self.downloaded = {}
         self.active_pages = {}
+        self.blocked = {}
         self.lock = asyncio.Lock()
+
+    def method_allowed(self, method: str, url: str) -> bool:
+        """Research browsing is read-only: no form posts, uploads or state-changing requests."""
+        method = method.upper()
+        if method in READ_METHODS:
+            return True
+        # PUT/PATCH/DELETE are never needed to read a source.
+        return method == "POST" and (urlsplit(url).hostname or "").lower() in self.post_hosts
 
     async def check_url(self, url):
         if self.allow_test_network:
@@ -72,13 +97,28 @@ class BrowserRuntime:
             )
 
             async def route_handler(route):
+                request = route.request
+                if not self.method_allowed(request.method, request.url):
+                    self.blocked.setdefault(session_id, []).append(
+                        {"method": request.method, "url": request.url[:500]}
+                    )
+                    await route.abort("blockedbyclient")
+                    return
                 try:
-                    await self.check_url(route.request.url)
+                    await self.check_url(request.url)
                     await route.continue_()
                 except HTTPException:
                     await route.abort()
 
+            async def websocket_handler(websocket):
+                # WebSockets bypass request routing and can send arbitrary data outward.
+                self.blocked.setdefault(session_id, []).append(
+                    {"method": "WEBSOCKET", "url": websocket.url[:500]}
+                )
+                await websocket.close(code=1008, reason="Read-only research browser")
+
             await context.route("**/*", route_handler)
+            await context.route_web_socket("**/*", websocket_handler)
             self.contexts[session_id] = context
             self.downloaded[session_id] = []
             context.on(
@@ -150,6 +190,7 @@ class BrowserRuntime:
                 {"index": i, "url": p.url} for i, p in enumerate(self.contexts[session_id].pages)
             ],
             "downloads": self.downloaded.get(session_id, []),
+            "blocked_requests": self.blocked.get(session_id, [])[-20:],
             "screenshot_base64": base64.b64encode(screenshot).decode(),
         }
 
@@ -208,6 +249,7 @@ class BrowserRuntime:
         self.accessed.pop(session_id, None)
         self.active_pages.pop(session_id, None)
         self.downloaded.pop(session_id, None)
+        self.blocked.pop(session_id, None)
         if context:
             await context.close()
         directory = (self.downloads / session_id).resolve()

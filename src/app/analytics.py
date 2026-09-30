@@ -99,7 +99,9 @@ def position_size(
     fee=Decimal(0),
     slippage=Decimal(0),
     tax=Decimal(0),
+    lot_step=Decimal(1),
 ) -> Decimal:
+    """Maximum quantity, floored to the broker's tradable quantity step."""
     numbers = (
         value,
         risk,
@@ -116,6 +118,8 @@ def position_size(
         raise ValueError("Sizing inputs must be finite and nonnegative")
     if not value > 0 or not 0 < risk <= 1 or not 0 < max_weight <= 1 or not 0 < stop < entry:
         raise ValueError("Invalid sizing constraints")
+    if not lot_step.is_finite() or not lot_step > 0:
+        raise ValueError("Quantity step must be positive")
     cost = entry * (1 + fee + slippage)
     loss = cost - stop * (1 - fee - slippage - tax)
     limit = min(
@@ -123,7 +127,7 @@ def position_size(
         buying_power / cost,
         max(Decimal(0), value * max_weight - existing_value) / cost,
     )
-    return limit.to_integral_value(rounding=ROUND_FLOOR)
+    return (limit / lot_step).to_integral_value(rounding=ROUND_FLOOR) * lot_step
 
 
 def technical_snapshot(candles: list[dict]) -> dict:
@@ -150,4 +154,7 @@ def technical_snapshot(candles: list[dict]) -> dict:
     window = candles[-20:]
     result["recent_low"] = min(window, key=lambda bar: Decimal(str(bar["low"])))
     result["recent_high"] = max(window, key=lambda bar: Decimal(str(bar["high"])))
+    year = candles[-252:]  # up to 52 weeks of completed sessions
+    result["low_52w"] = min(year, key=lambda bar: Decimal(str(bar["low"])))
+    result["high_52w"] = max(year, key=lambda bar: Decimal(str(bar["high"])))
     return result
