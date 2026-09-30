@@ -63,7 +63,7 @@ class BrowserAdapter:
         return self._request("/action", kwargs)
 
     def close(self):
-        if self.settings.browser_token.get_secret_value():
+        if self.settings.browser_enabled and self.settings.browser_token.get_secret_value():
             try:
                 self.client.post(
                     self.settings.browser_url + "/close",

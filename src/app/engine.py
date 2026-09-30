@@ -224,18 +224,21 @@ class ResearchEngine:
             "(filter by name) or payload. The context only carries an index and snippets.",
         )
         browser = BrowserAdapter(self.settings, run_id, tools)
-        tools.add(
-            "browser_open",
-            UrlInput,
-            browser.open,
-            "Browser fallback for dynamic sources. Returns text, element refs and screenshot.",
-        )
-        tools.add(
-            "browser_action",
-            BrowserAction,
-            browser.action,
-            "Operate the current read-only browser by element refs or screenshot coordinates.",
-        )
+        # The Chromium worker is an optional fallback; without it the model is not offered
+        # tools that could only fail.
+        if self.settings.browser_enabled:
+            tools.add(
+                "browser_open",
+                UrlInput,
+                browser.open,
+                "Browser fallback for dynamic sources. Returns text, element refs and screenshot.",
+            )
+            tools.add(
+                "browser_action",
+                BrowserAction,
+                browser.action,
+                "Operate the current read-only browser by element refs or screenshot coordinates.",
+            )
         tools.records = self.store.evidence(run_id)
         return tools, browser
 

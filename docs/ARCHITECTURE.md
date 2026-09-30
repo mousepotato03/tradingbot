@@ -200,7 +200,9 @@ Owns:
 
 One worker owns the Toss token and serializes token issuance. This avoids invalidating another process's token. Requests are paced per Toss rate-limit group (for example `MARKET_DATA`, `MARKET_DATA_CHART`, `ACCOUNT`, `ORDER_INFO`) by token buckets seeded from the documented limits and updated from `X-RateLimit-*` headers, so a chart or account call does not delay quotes. A scheduler thread runs condition checks alongside research; a separate maintenance thread runs discovery triage and outcome refresh so slow model or history calls never delay entry/stop checks. Persistent jobs/checkpoints survive process restart; startup recovery assumes the previous sole worker has stopped.
 
-### browser-worker
+### browser-worker (optional)
+
+Off by default: it starts only with the Compose `browser` profile and `TRADINGBOT_BROWSER_ENABLED=true`. Without it, the model is not offered browser tools and research uses structured sources, search and the direct document reader.
 
 Owns:
 

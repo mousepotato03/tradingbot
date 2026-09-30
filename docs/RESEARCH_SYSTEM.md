@@ -68,7 +68,7 @@ Rules:
 
 ### Tier D — Playwright / Chromium
 
-Use only when direct reading is inadequate.
+Optional and off by default (`TRADINGBOT_BROWSER_ENABLED`, Compose profile `browser`). Use only when direct reading is inadequate.
 
 Examples:
 

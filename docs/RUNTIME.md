@@ -61,7 +61,7 @@ curl http://127.0.0.1:8000/health
 docker compose logs --tail 100 research-worker browser-worker
 ```
 
-`postgres → migrate → research-api/research-worker` 순서로 시작한다. PostgreSQL 18의 `/var/lib/postgresql`과 `.research`를 볼륨에 저장한다. API는 호스트 `127.0.0.1:8000`에만 열며 SSH tunnel 등으로 접근한다. 별도 인증 없이 공개 포트로 노출하지 않는다. 모든 서비스는 JSON 로그를 10 MB × 3개로 회전한다.
+`postgres → migrate → research-api/research-worker` 순서로 시작한다. 기본 구성은 postgres, migrate(1회 실행), research-api, research-worker, egress-proxy다. Chromium browser worker는 문서를 직접 읽을 수 없을 때만 쓰는 선택 기능이며 메모리를 1.5GB까지 쓴다. 그래서 기본으로 띄우지 않고 모델에게 브라우저 도구도 주지 않는다. 쓰려면 `.env`에 `TRADINGBOT_BROWSER_ENABLED=true`를 넣고 `docker compose --profile browser up -d --build`로 띄운다. PostgreSQL 18의 `/var/lib/postgresql`과 `.research`를 볼륨에 저장한다. API는 호스트 `127.0.0.1:8000`에만 열며 SSH tunnel 등으로 접근한다. 별도 인증 없이 공개 포트로 노출하지 않는다. 모든 서비스는 JSON 로그를 10 MB × 3개로 회전한다.
 
 browser worker는 별도의 non-root 컨테이너다. Toss·OpenAI·검색·DB 자격 증명, 호스트 디렉터리, Docker socket을 전달하지 않는다. read-only filesystem, 제한된 tmpfs, 메모리/CPU/PID 제한, seccomp와 Chromium sandbox를 사용한다. 인터넷은 Squid proxy로 나가며 사설망·loopback·메타데이터 주소와 80/443 외 포트를 막는다. 직접 문서 reader도 이 proxy를 사용한다. Chromium sandbox가 시작되지 않으면 VM의 user namespace/seccomp/AppArmor 설정을 조사하고 sandbox를 끄는 방식으로 우회하지 않는다.
 

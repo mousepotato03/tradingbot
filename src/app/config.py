@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     # Live searches allowed in any rolling 30 days; None removes the local cap.
     search_monthly_limit: int | None = Field(default=900, ge=0)
     sec_user_agent: str = ""
+    # Optional Chromium fallback (Compose profile "browser"); off unless explicitly enabled.
+    browser_enabled: bool = False
     browser_url: str = "http://browser-worker:8001"
     browser_token: SecretStr = SecretStr("")
     discord_webhook: SecretStr = SecretStr("")

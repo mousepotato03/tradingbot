@@ -79,7 +79,10 @@ services:
       TRADINGBOT_MARKET_OPEN_OFFSET_MINUTES: ${TRADINGBOT_MARKET_OPEN_OFFSET_MINUTES:-10}
       TRADINGBOT_RESEARCH_INTERVAL_HOURS: ${TRADINGBOT_RESEARCH_INTERVAL_HOURS:-24}
       TRADINGBOT_SEC_USER_AGENT: ${TRADINGBOT_SEC_USER_AGENT:?Set SEC contact}
-      TRADINGBOT_BROWSER_TOKEN: ${TRADINGBOT_BROWSER_TOKEN:?Set browser token}
+      # Chromium fallback is opt-in: set TRADINGBOT_BROWSER_ENABLED=true and start the
+      # "browser" profile (docker compose --profile browser up -d).
+      TRADINGBOT_BROWSER_ENABLED: ${TRADINGBOT_BROWSER_ENABLED:-false}
+      TRADINGBOT_BROWSER_TOKEN: ${TRADINGBOT_BROWSER_TOKEN:-}
       TRADINGBOT_BROWSER_URL: http://browser-worker:8001
       TRADINGBOT_EGRESS_PROXY: http://egress-proxy:3128
       TRADINGBOT_DISCORD_WEBHOOK: ${TRADINGBOT_DISCORD_WEBHOOK:-}
@@ -92,7 +95,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      browser-worker:
+      egress-proxy:
         condition: service_started
     networks: [core, browser-control, public]
     restart: unless-stopped
@@ -105,12 +108,14 @@ services:
       start_period: 30s
       retries: 3
   browser-worker:
+    # Optional: not started unless the "browser" profile is enabled.
+    profiles: [browser]
     logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.browser
     environment:
-      BROWSER_TOKEN: ${TRADINGBOT_BROWSER_TOKEN:?Set browser token}
+      BROWSER_TOKEN: ${TRADINGBOT_BROWSER_TOKEN:-}
       BROWSER_EGRESS_PROXY: http://egress-proxy:3128
       # Read-only by default; list exact hostnames only when a source needs a POST search form.
       BROWSER_POST_ALLOWED_HOSTS: ${TRADINGBOT_BROWSER_POST_ALLOWED_HOSTS:-}
