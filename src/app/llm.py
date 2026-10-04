@@ -85,6 +85,8 @@ is EXIT: a stop below the current price and optional take_profit levels above it
 evidence fact in USD/share (e.g. sma200, recent_low, low_52w, or a calculate result such as
 recent_low minus an ATR multiple). The monitor alerts when a regular-session price crosses them.
 A guard may accompany 판단 보류; it protects the holding, it is not a new trade.
+previous_report.position_guard is the stop the monitor watches now. Keep or replace it with a
+validated guard; if a held position gets none, that previous guard stays in force.
 Notes (new_entry_note, holder_note) stay qualitative. sizing_unit=fractional_amount means a USD
 market order by amount (no limit price); otherwise quantities are whole shares.
 For an ETF, research the index/methodology, expense ratio (summary prospectus), holdings

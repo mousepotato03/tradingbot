@@ -329,6 +329,40 @@ class TossAdapter:
             < datetime.fromisoformat(session["endTime"])
         )
 
+    @staticmethod
+    def _sessions(calendar):
+        """(label, start, end) for every listed session of the three calendar days."""
+        labels = {
+            "regularMarket": "REGULAR",
+            "dayMarket": "DAY",
+            "preMarket": "PRE",
+            "afterMarket": "AFTER",
+        }
+        for day in ("previousBusinessDay", "today", "nextBusinessDay"):
+            for key, label in labels.items():
+                session = (calendar.get(day) or {}).get(key)
+                if session:
+                    yield (
+                        label,
+                        datetime.fromisoformat(session["startTime"]),
+                        datetime.fromisoformat(session["endTime"]),
+                    )
+
+    def _completed_session_date(self):
+        """NY date of the newest final daily bar: today's once its regular and after sessions end."""
+        now = utcnow()
+        today = now.astimezone(NEW_YORK).date()
+        try:
+            day = self._calendar().get("today") or {}
+            ends = [
+                datetime.fromisoformat(session["endTime"])
+                for session in (day.get("regularMarket"), day.get("afterMarket"))
+                if session
+            ]
+        except (ToolError, KeyError, TypeError, ValueError):
+            ends = []
+        return today if ends and now >= max(ends) else today - timedelta(days=1)
+
     def quotes(self, tickers):
         """One /prices call per 200 symbols; returns {ticker: EvidenceRecord | ToolError}."""
         tickers = list(dict.fromkeys(tickers))
@@ -361,11 +395,30 @@ class TossAdapter:
         regular = session and datetime.fromisoformat(
             session["startTime"]
         ) <= now < datetime.fromisoformat(session["endTime"])
+        sessions = list(self._sessions(calendar))
+        stale = self.settings.quote_max_age_seconds
+        if not regular:
+            # Between regular sessions the last observed price stays the reference until the next
+            # open, provided it was current when the last session closed. Unknown bounds keep 90 s.
+            closes = [end for label, _, end in sessions if label == "REGULAR" and end <= now]
+            opens = [start for label, start, _ in sessions if label == "REGULAR" and start > now]
+            if (
+                closes
+                and opens
+                and effective >= max(closes) - timedelta(seconds=stale)
+                and min(opens) > effective
+            ):
+                stale = max(stale, int((min(opens) - effective).total_seconds()))
         payload = {
             "price": str(price),
             "currency": "USD",
             "market_state": "REGULAR" if regular else "CLOSED",
+            # Extended sessions (DAY/PRE/AFTER) trade thinly; levels are judged on REGULAR only.
+            "session": next(
+                (label for label, start, end in sessions if start <= now < end), "CLOSED"
+            ),
             "quote_timestamp": effective.isoformat(),
+            "valid_until": (effective + timedelta(seconds=stale)).isoformat(),
             "calendar": calendar,
         }
         return self.record(
@@ -375,11 +428,12 @@ class TossAdapter:
             payload,
             [NumericFact(name="last_price", value=price, unit="USD/share", currency="USD")],
             effective,
-            self.settings.quote_max_age_seconds,
+            stale,
         )
 
     def ohlcv(self, ticker, count=300):
         by_time, before, raw = {}, None, []
+        today, completed = utcnow().astimezone(NEW_YORK).date(), None
         for _ in range(10):
             params = {
                 "symbol": ticker,
@@ -395,9 +449,12 @@ class TossAdapter:
                 if row["currency"] != "USD":
                     raise ToolError("CURRENCY_MISMATCH")
                 stamp = datetime.fromisoformat(row["timestamp"])
-                # A daily bar is stamped at local midnight, not at completion.
-                if stamp.date() >= utcnow().astimezone(NEW_YORK).date():
-                    continue
+                # A daily bar is stamped at local midnight, not at completion; today's bar is
+                # final only after the session ends.
+                if stamp.date() >= today:
+                    completed = completed or self._completed_session_date()
+                    if stamp.date() > completed:
+                        continue
                 bar = {
                     name: str(number(row[field], positive=name != "volume"))
                     for name, field in {
@@ -426,10 +483,12 @@ class TossAdapter:
         candles = [by_time[t] for t in sorted(by_time)][-count:]
         effective = None
         if candles:
-            # Observation time of the latest completed session: its regular close.
+            # Observation time of the latest completed session: its regular close. An early
+            # close (13:00) ends before the usual 16:00 stamp, which must not lie in the future.
             session = datetime.fromisoformat(candles[-1]["timestamp"]).date()
-            effective = datetime.combine(session, datetime.min.time(), NEW_YORK) + timedelta(
-                hours=16
+            effective = min(
+                datetime.combine(session, datetime.min.time(), NEW_YORK) + timedelta(hours=16),
+                utcnow(),
             )
         return self.record(
             ticker,

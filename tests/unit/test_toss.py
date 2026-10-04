@@ -6,6 +6,7 @@ import pytest
 
 from app.adapters.http import ToolError
 from app.adapters.toss import RateLimiter, TossAdapter
+from app.evidence import evidence_is_fresh
 from app.models import utcnow
 
 
@@ -319,3 +320,116 @@ def test_next_regular_open_skips_to_the_next_business_day(settings):
     assert toss.next_regular_open(now - timedelta(hours=3)) == datetime.fromisoformat(
         today["startTime"]
     )
+
+
+def closed_calendar(now, **today):
+    """Today's regular session closed three hours ago; the next one opens in 60 hours."""
+    return {
+        "previousBusinessDay": {
+            "date": "p",
+            "regularMarket": {
+                "startTime": (now - timedelta(hours=33.5)).isoformat(),
+                "endTime": (now - timedelta(hours=27)).isoformat(),
+            },
+        },
+        "today": {
+            "date": "t",
+            "regularMarket": {
+                "startTime": (now - timedelta(hours=9.5)).isoformat(),
+                "endTime": (now - timedelta(hours=3)).isoformat(),
+            },
+            **today,
+        },
+        "nextBusinessDay": {
+            "date": "n",
+            "regularMarket": {
+                "startTime": (now + timedelta(hours=60)).isoformat(),
+                "endTime": (now + timedelta(hours=66.5)).isoformat(),
+            },
+        },
+    }
+
+
+def closed_quote(settings, stamp, calendar):
+    price = {"symbol": "T", "currency": "USD", "lastPrice": "10", "timestamp": stamp.isoformat()}
+    toss, _ = adapter(settings, {"/api/v1/prices": [price], "/api/v1/market-calendar/US": calendar})
+    return toss.quote("T")
+
+
+# Toss documents `timestamp` as the data time: either the last trade or the snapshot time.
+@pytest.mark.parametrize("since_close", [timedelta(seconds=-30), timedelta(hours=3)])
+def test_closed_market_quote_is_the_reference_until_the_next_open(settings, since_close):
+    now = utcnow()
+    close = now - timedelta(hours=3)
+    stamp = close + since_close
+    record = closed_quote(settings, stamp, closed_calendar(now))
+    next_open = now + timedelta(hours=60)
+    assert record.payload["market_state"] == "CLOSED" and record.payload["session"] == "CLOSED"
+    assert record.stale_after_seconds == int((next_open - stamp).total_seconds())
+    assert evidence_is_fresh(record, now + timedelta(hours=59))
+    assert not evidence_is_fresh(record, next_open + timedelta(minutes=1))
+    assert datetime.fromisoformat(record.payload["valid_until"]) <= next_open
+
+
+def test_quote_older_than_the_last_close_stays_stale(settings):
+    now = utcnow()
+    stamp = now - timedelta(hours=3, minutes=10)  # ten minutes before the close
+    record = closed_quote(settings, stamp, closed_calendar(now))
+    assert record.stale_after_seconds == settings.quote_max_age_seconds
+    assert not evidence_is_fresh(record, now)
+
+
+def test_holiday_and_extended_sessions_keep_the_last_close_reference(settings):
+    now = utcnow()
+    holiday = closed_calendar(now)
+    holiday["today"] = {"date": "t"}  # weekend or holiday: every session is null
+    record = closed_quote(settings, now - timedelta(hours=27), holiday)
+    assert evidence_is_fresh(record, utcnow())
+    after = {
+        "afterMarket": {
+            "startTime": (now - timedelta(hours=3)).isoformat(),
+            "endTime": (now + timedelta(hours=1)).isoformat(),
+        }
+    }
+    record = closed_quote(settings, now, closed_calendar(now, **after))
+    assert record.payload["market_state"] == "CLOSED" and record.payload["session"] == "AFTER"
+    assert evidence_is_fresh(record, now + timedelta(hours=2))
+
+
+@pytest.mark.parametrize("session_over,bars", [(False, 2), (True, 3)])
+def test_todays_bar_is_used_once_the_session_is_over(settings, session_over, bars):
+    now = utcnow()
+    today = now.astimezone(ZoneInfo("America/New_York")).date()
+    end = now - timedelta(hours=1) if session_over else now + timedelta(hours=1)
+    calendar = {
+        "today": {
+            "date": today.isoformat(),
+            "regularMarket": {
+                "startTime": (end - timedelta(hours=6.5)).isoformat(),
+                "endTime": end.isoformat(),
+            },
+        }
+    }
+
+    def candles(params):
+        return {
+            "candles": [
+                {
+                    "timestamp": f"{day.isoformat()}T00:00:00-04:00",
+                    "currency": "USD",
+                    "openPrice": "10",
+                    "highPrice": "11",
+                    "lowPrice": "9",
+                    "closePrice": "10",
+                    "volume": "100",
+                }
+                for day in (today, today - timedelta(days=1), today - timedelta(days=2))
+            ],
+            "nextBefore": None,
+        }
+
+    toss, _ = adapter(
+        settings, {"/api/v1/candles": candles, "/api/v1/market-calendar/US": calendar}
+    )
+    record = toss.ohlcv("TEST", 5)
+    assert len(record.payload["candles"]) == bars

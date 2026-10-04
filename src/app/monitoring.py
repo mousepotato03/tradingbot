@@ -1,11 +1,13 @@
 import time
-from datetime import timedelta
+from datetime import UTC, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
 from app.adapters.http import ToolError
 from app.evidence import content_hash, evidence_is_fresh
+from app.lifecycle import guard_of
 from app.models import CandidateState, ResearchRequest, Security, utcnow
 from app.schedule import first_research_at, next_research_at
 from app.storage import OutboxRow, RunRow, WatchRow
@@ -19,6 +21,35 @@ PRICE_SIGNALS = (
     "HOLDER_STOP",
     "HOLDER_TAKE_PROFIT_",
 )
+SEOUL = ZoneInfo("Asia/Seoul")
+SIGNAL_LABELS = {
+    "INVALIDATION_PRICE": "무효화 가격 도달",
+    "ENTRY_CONDITION": "진입 범위 도달",
+    "ENTRY_REVIEW_REQUIRED": "진입 범위 도달 · 조건 재검토",
+    "HOLDER_STOP": "보유 손절선 도달",
+    "POSITION_CHANGED": "보유 수량 변경",
+    "DATA_QUALITY_FAILURE": "데이터 조회 실패",
+}
+
+
+def signal_label(signal: str) -> str:
+    """Readable alert title; numbered levels are shown from 1."""
+    for prefix, label in (("TARGET_", "목표가"), ("HOLDER_TAKE_PROFIT_", "익절 검토 가격")):
+        if signal.startswith(prefix):
+            return f"{label} {int(signal.removeprefix(prefix)) + 1} 도달"
+    return SIGNAL_LABELS.get(signal, signal)
+
+
+def signal_content(ticker, signal, detail, previous) -> str:
+    if previous is None:
+        basis = "기준 리서치가 없어 첫 조사를 요청합니다."
+    else:
+        created = previous.created_at
+        if created.tzinfo is None:  # reports are written in UTC
+            created = created.replace(tzinfo=UTC)
+        at = created.astimezone(SEOUL).strftime("%m/%d %H:%M KST")
+        basis = f"직전 리서치({at}) 기준과 비교한 변화로 재조사를 요청합니다."
+    return f"{ticker} · {signal_label(signal)}\n{detail}\n{basis}"
 
 
 def error_code(error):
@@ -102,7 +133,8 @@ class Monitor:
     @staticmethod
     def _check_levels(report, body, price, signals, details):
         """Compare a regular-session price with the report's validated levels."""
-        plan, guard = report.decision.trade_plan, report.decision.position_guard
+        plan = report.decision.trade_plan if report.validation.valid else None
+        guard = guard_of(report)
         if plan:
             if price <= plan.stop.value:
                 signals.add("INVALIDATION_PRICE")
@@ -162,13 +194,13 @@ class Monitor:
         if not watched:
             return
         reports = {ticker: self.store.previous(ticker) for ticker, _ in watched}
-        # Reports whose validated levels the monitor can check: an entry plan, a holding guard.
+        # Reports whose validated levels the monitor can check: an entry plan, a holding guard
+        # (the report's own or the one a held position inherited).
         priced = {
             ticker: report
             for ticker, report in reports.items()
             if report
-            and report.validation.valid
-            and (report.decision.trade_plan or report.decision.position_guard)
+            and ((report.validation.valid and report.decision.trade_plan) or guard_of(report))
         }
         quotes, batch_error = {}, None
         if priced:
@@ -271,7 +303,9 @@ class Monitor:
                                     "fixture": self.engine.settings.mode == "fixture",
                                     "expires_at": (now + timedelta(minutes=15)).isoformat(),
                                     "kind": signal,
-                                    "content": f"{ticker} · {signal}\n{details[signal]}\n이전 보고서 {previous.run_id if previous else '없음'}의 조건과 비교한 변화로 재조사를 요청합니다.",
+                                    "content": signal_content(
+                                        ticker, signal, details[signal], previous
+                                    ),
                                 },
                             )
                         )

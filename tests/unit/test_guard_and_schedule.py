@@ -7,7 +7,9 @@ from sqlalchemy import select
 
 from app.adapters.fixture import FixtureAdapters
 from app.engine import ResearchEngine
+from app.lifecycle import candidate_state, guard_of
 from app.llm import FixtureModel
+from app.models import CandidateState as State
 from app.models import (
     EvidenceRecord,
     PortfolioDecision,
@@ -17,7 +19,7 @@ from app.models import (
 )
 from app.monitoring import Monitor
 from app.schedule import first_research_at, next_research_at
-from app.storage import OutboxRow, RunRow, WatchRow
+from app.storage import OutboxRow, ReportRow, RunRow, WatchRow
 from app.validation import validate_decision
 
 NEW_YORK = ZoneInfo("America/New_York")
@@ -39,10 +41,11 @@ class Held(FixtureAdapters):
 
     def __init__(self):
         self.price, self.state, self.age = "100", "REGULAR", timedelta(0)
+        self.quantity = "5"
 
     def portfolio(self, ticker):
         record = super().portfolio(ticker)
-        record.payload["holdings"] = [holding()]
+        record.payload["holdings"] = [holding(self.quantity)] if self.quantity else []
         return record
 
     def account_snapshot(self):
@@ -105,6 +108,9 @@ def test_a_held_position_gets_a_validated_stop_the_monitor_watches(store, settin
         mode = ResearchRequest.model_validate(follow.request).mode
     stop_alerts = [a for a in alerts if a["kind"] == "HOLDER_STOP"]
     assert len(stop_alerts) == 1 and "보유 손절선" in stop_alerts[0]["content"]
+    assert stop_alerts[0]["content"].startswith("TEST · 보유 손절선 도달\n")
+    assert "직전 리서치(" in stop_alerts[0]["content"]
+    assert report.run_id not in stop_alerts[0]["content"]
     assert mode == "critical"
 
 
@@ -129,6 +135,55 @@ def test_closed_market_prices_neither_trigger_nor_fail_and_breaches_are_not_rese
     tick()
     market.state = "REGULAR"
     assert tick().count("HOLDER_STOP") == 1  # still breached next session: not sent again
+
+
+def outbox(store):
+    with store.transaction() as session:
+        return [r.body for r in session.scalars(select(OutboxRow).order_by(OutboxRow.created_at))]
+
+
+def test_a_deferred_holding_keeps_its_validated_stop(store, settings):
+    engine, market, first = held_report(store, settings)
+    stop = first.decision.position_guard.stop.value
+    deferring = ResearchEngine(settings, store, model=FixtureModel("missing"), market=market)
+    second = deferring.run(store.enqueue(ResearchRequest(ticker="TEST")))
+    assert second.decision.rating.value == "판단 보류" and second.decision.position_guard is None
+    assert second.candidate_state == State.ACTIVE
+    assert guard_of(second).stop.value == stop and second.inherited_guard_from == first.run_id
+    third = deferring.run(store.enqueue(ResearchRequest(ticker="TEST")))
+    assert third.inherited_guard_from == first.run_id  # chained, not re-attributed
+    contents = [body["content"] for body in outbox(store)]
+    assert not any("감시 해제" in content for content in contents)
+    assert any("이전 보고서 기준 유지" in content for content in contents)
+    with store.transaction() as session:
+        assert "기준을 유지합니다" in session.get(ReportRow, third.run_id).markdown
+    market.price = str(stop - 1)
+    with store.transaction() as session:
+        session.get(WatchRow, "TEST").next_condition_at = utcnow() - timedelta(seconds=1)
+    Monitor(deferring).tick()
+    assert [b["kind"] for b in outbox(store)].count("HOLDER_STOP") == 1
+
+
+def test_a_sold_position_does_not_inherit_a_stop(store, settings):
+    engine, market, first = held_report(store, settings)
+    market.quantity = ""
+    deferring = ResearchEngine(settings, store, model=FixtureModel("missing"), market=market)
+    second = deferring.run(store.enqueue(ResearchRequest(ticker="TEST")))
+    assert second.candidate_state == State.EXITED and guard_of(second) is None
+    assert any("보유 손절선 감시 해제" in body["content"] for body in outbox(store))
+
+
+def test_a_holding_read_early_in_a_long_run_stays_active(store, settings):
+    engine, market, report = held_report(store, settings)
+    records = store.evidence(report.run_id)
+    late = report.model_copy(update={"created_at": report.created_at + timedelta(minutes=15)})
+    assert candidate_state(late, records, None) == State.ACTIVE
+    for record in records:
+        if record.evidence_type == "portfolio":
+            record.payload["holdings"] = []
+    # An empty but stale account read cannot conclude an exit; a fresh one can.
+    assert candidate_state(late, records, report) == State.ACTIVE
+    assert candidate_state(report, records, report) == State.EXITED
 
 
 def decision(**changes):

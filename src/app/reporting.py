@@ -1,3 +1,4 @@
+from app.lifecycle import guard_of, own_guard
 from app.models import ACTION_LABELS, EvidenceRecord, ResearchReport
 
 
@@ -99,12 +100,15 @@ def markdown(report: ResearchReport, records: list[EvidenceRecord]) -> str:
     else:
         lines.append("검증된 정밀 거래 계획 없음. 부족한 입력이나 검증 오류를 먼저 확인합니다.")
     lines += [f"- 무효화: {c}" for c in decision.invalidation_conditions]
-    guard = decision.position_guard
-    if guard and report.validation.valid:
+    guard = guard_of(report)
+    if guard:
+        lines += ["", "## 보유 포지션 손절·익절 감시", ""]
+        if own_guard(report) is None:
+            lines.append(
+                f"- 이번 결정에 검증된 새 기준이 없어 보고서 {report.inherited_guard_from}에서 "
+                "검증된 기준을 유지합니다."
+            )
         lines += [
-            "",
-            "## 보유 포지션 손절·익절 감시",
-            "",
             f"- 손절선: {guard.stop.value} {guard.currency} — {guard.stop.basis}",
         ]
         lines += [

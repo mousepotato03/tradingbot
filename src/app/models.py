@@ -429,3 +429,7 @@ class ResearchReport(Model):
     previous_report_id: str | None
     tool_calls: int
     limitations: list[str]
+    # A held position keeps the last validated guard until a new one validates; the decision
+    # itself is unchanged. inherited_guard_from names the report that validated it.
+    inherited_guard: PositionGuard | None = None
+    inherited_guard_from: str | None = None

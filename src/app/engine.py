@@ -16,7 +16,14 @@ from app.evidence import (
     quotation_record,
     validate_claims,
 )
-from app.lifecycle import candidate_state, changes
+from app.lifecycle import (
+    candidate_state,
+    changes,
+    guard_of,
+    inherit_guard,
+    own_guard,
+    report_alert,
+)
 from app.llm import FixtureModel, ModelPort, OpenAIModel, policy_prompt
 from app.models import (
     CandidateState,
@@ -359,7 +366,10 @@ class ResearchEngine:
                         "already collected: do not re-fetch them unless stale. Use "
                         "evidence_read for full text, all facts or payload before relying on "
                         "details. Cite numbers with numeric_references (exact name/value/unit), "
-                        "not quotes."
+                        "not quotes. Outside the regular session a quote stays fresh until the "
+                        "next regular open (payload valid_until): a closed market is not a data "
+                        "gap. Its last price may include extended-hours trades, so it can differ "
+                        "from the latest daily close without being a data conflict."
                     ),
                     "evidence": [self._index_entry(r, at) for r in tools.records],
                     "completed_stages": {
@@ -579,7 +589,14 @@ class ResearchEngine:
             if validation.valid:
                 persist_quotes(decision.thesis + decision.material_changes)
             else:
-                decision = self._defer([i.message for i in validation.issues])
+                # A binding gap is itself the reason; other issues name the failed check.
+                reasons = []
+                for issue in validation.issues:
+                    if issue.code == "BLOCKING_GAP":
+                        reasons += binding + [g.description for g in decision.blocking_gaps()]
+                    else:
+                        reasons.append(f"PM 결정 검증 실패 {issue.code}: {issue.message}")
+                decision = self._defer(reasons)
         except ToolError as error:
             if error.code != "RESEARCH_BUDGET_EXHAUSTED":
                 self.store.fail(run_id, error.code)
@@ -596,7 +613,7 @@ class ResearchEngine:
                 }
             )
             decision, rejected = (
-                self._defer([error.code + ": evidence sufficiency not established"]),
+                self._defer([f"조사 예산 소진({error.code})으로 근거 충분성을 확정하지 못함"]),
                 [],
             )
             validation = validate_decision(
@@ -628,8 +645,9 @@ class ResearchEngine:
                 for r in tools.records
             )
         ):
+            official = "ETF 보유종목(N-PORT)" if basis == "fund_holdings" else "재무제표(XBRL)"
             decision = self._defer(
-                [f"Verified identity, quote or official {basis} evidence unavailable"]
+                [f"검증된 종목 식별·시세·공식 {official} 근거 중 일부를 확보하지 못함"]
             )
         all_quotes = [
             r for r in tools.records if r.evidence_type == "quote" and r.ticker == request.ticker
@@ -640,7 +658,7 @@ class ResearchEngine:
             and decision.rating != Rating.DEFER
         ):
             rejected.append(decision)
-            decision = self._defer(["Current quote is stale at the decision cutoff"])
+            decision = self._defer(["결정 시점의 시세가 오래되어 가격 기반 판단을 검증할 수 없음"])
         report = ResearchReport(
             run_id=run_id,
             ticker=request.ticker,
@@ -662,6 +680,7 @@ class ResearchEngine:
             limitations=["Synthetic offline fixture"] if self.settings.mode == "fixture" else [],
         )
         report.candidate_state = candidate_state(report, tools.records, previous)
+        inherit_guard(report, previous)
         events = (
             changes(
                 previous,
@@ -673,7 +692,7 @@ class ResearchEngine:
             else []
         )
         if request.report_policy == "always" and not events:
-            events = changes(None, report)
+            events = [report_alert(report, [])]
         self.store.commit_report(
             report,
             markdown(report, tools.records),
@@ -799,7 +818,7 @@ class ResearchEngine:
             else research.evidence_sufficient
         )
         if not sufficient:
-            binding.append("Research manager has not established evidence sufficiency")
+            binding.append("리서치 매니저가 근거 충분성을 확정하지 않음")
         return binding
 
     @staticmethod
@@ -884,7 +903,11 @@ class ResearchEngine:
 
     @staticmethod
     def _previous_summary(previous: ResearchReport) -> dict:
-        decision, plan = previous.decision, previous.decision.trade_plan
+        decision, plan, guard = (
+            previous.decision,
+            previous.decision.trade_plan,
+            guard_of(previous),
+        )
         return {
             "run_id": previous.run_id,
             "as_of": previous.as_of,
@@ -909,6 +932,18 @@ class ResearchEngine:
                 "conditions": plan.conditions,
                 "sizing_unit": plan.sizing_unit,
             },
+            # The stop the monitor watches now; it stays in force until a new guard validates.
+            "position_guard": None
+            if guard is None
+            else {
+                "currency": guard.currency,
+                "stop": guard.stop.value,
+                "stop_basis": guard.stop.basis,
+                "take_profit": [level.value for level in guard.take_profit],
+                "validated_in_report": previous.run_id
+                if own_guard(previous)
+                else previous.inherited_guard_from,
+            },
         }
 
     @staticmethod
@@ -926,6 +961,8 @@ class ResearchEngine:
             invalidation_conditions=[],
             monitoring_checklist=["누락·충돌 근거 재확인"],
             material_changes=[],
-            material_gaps=[MaterialGap(description=gap, severity="blocking") for gap in gaps],
+            material_gaps=[
+                MaterialGap(description=gap, severity="blocking") for gap in dict.fromkeys(gaps)
+            ],
             trade_plan=None,
         )

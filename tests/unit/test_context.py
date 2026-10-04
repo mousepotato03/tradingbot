@@ -135,10 +135,10 @@ def test_research_manager_blocking_gap_forces_deferral(store, settings):
         )
         assert report.decision.rating.value == "판단 보류"
         assert report.rejected_decisions
-        assert any(
-            gap.description.startswith("Blocking evidence gaps require")
-            for gap in report.decision.material_gaps
-        )
+        # The research manager's binding gap is the stated reason, not the validator's code.
+        reasons = {gap.description for gap in report.decision.material_gaps}
+        assert reasons & {"공시와 IR 수치 충돌", "리서치 매니저가 근거 충분성을 확정하지 않음"}
+        assert not any(reason.startswith("PM 결정 검증 실패 BLOCKING_GAP") for reason in reasons)
 
 
 def test_pm_sees_open_gaps_from_every_stage(store, settings):

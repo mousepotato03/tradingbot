@@ -320,6 +320,8 @@ An existing holding needs levels the monitor can watch, not only a narrative. Fo
 
 The validator checks evidence, lineage freshness and position relative to the fresh price. A guard may accompany 판단 보류: it protects the existing holding and is not a new trade. Guard levels are judged only on regular-session prices, so thin pre-market or after-hours trades do not trigger them.
 
+A guard, once validated, stays in force for a held position until a newer guard validates. When a report for a position the account still holds validates no guard of its own (판단 보류 without a guard, a rejected decision, or levels that cannot be validated), the report records the previous effective guard as `inherited_guard` with the report that validated it, and the monitor keeps watching it. The decision itself is not changed; the alert and report mark the stop as carried over. The PM sees the guard in force in the previous-report summary and keeps or replaces it. Only a position the account no longer holds ends stop monitoring.
+
 ## 12. New entrant vs holder
 
 Always produce both:
