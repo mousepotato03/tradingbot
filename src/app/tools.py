@@ -318,7 +318,7 @@ class ToolRegistry:
         inputs = [first_record] + ([second_record] if second_record else [])
         effective_at, stale_after = inherit_freshness(inputs)
         return EvidenceRecord(
-            ticker=self.ticker,
+            ticker=first_record.ticker,
             evidence_type="calculation",
             source_name="Deterministic calculator",
             source_tier=2,
@@ -362,8 +362,8 @@ class ToolRegistry:
             raise ToolError("EXTRACTION_NUMBER_MISMATCH")
         # Tables state units once in the header ("In millions, except per share data").
         body = normalize_span(source.text)
-        preceding = body[max(0, body.find(normalize_span(text)) - SCALE_CONTEXT) :]
-        preceding = preceding[: len(preceding) - len(normalize_span(text))].lower()
+        quote_start = body.index(normalize_span(text))
+        preceding = body[max(0, quote_start - SCALE_CONTEXT) : quote_start].lower()
         labels = {1000: "thousand", 1000000: "million", 1000000000: "billion"}
         scale_source = "quote"
         if data.scale != 1 and labels[data.scale] not in text.lower():
@@ -379,7 +379,7 @@ class ToolRegistry:
             raise ToolError("EXTRACTION_UNIT_UNSUPPORTED")
         effective_at, stale_after = inherit_freshness([source])
         return EvidenceRecord(
-            ticker=self.ticker,
+            ticker=source.ticker,
             evidence_type="extracted_fact",
             source_name=source.source_name,
             source_tier=source.source_tier,
@@ -473,7 +473,7 @@ def add_technical_record(registry, source: EvidenceRecord) -> EvidenceRecord:
         )
     effective_at, stale_after = inherit_freshness([source])
     return EvidenceRecord(
-        ticker=registry.ticker,
+        ticker=source.ticker,
         evidence_type="technical",
         source_name="Verified OHLCV calculations",
         source_tier=2,

@@ -429,6 +429,9 @@ class ResearchReport(Model):
     previous_report_id: str | None
     tool_calls: int
     limitations: list[str]
+    # Current committee draft (reviews may be partial on budget exhaustion); old reports load.
+    trade_proposal: PortfolioDecision | None = None
+    trade_proposal_validation: ValidationResult | None = None
     # A held position keeps the last validated guard until a new one validates; the decision
     # itself is unchanged. inherited_guard_from names the report that validated it.
     inherited_guard: PositionGuard | None = None

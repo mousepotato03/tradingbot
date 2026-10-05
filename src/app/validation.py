@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from app.analytics import position_size, reward_risk
-from app.evidence import evidence_is_fresh, lineage_fresh, validate_claims
+from app.evidence import evidence_is_fresh, lineage_fresh, lineage_identity, validate_claims
 from app.models import (
     EvidenceRecord,
     HolderAction,
@@ -169,6 +169,12 @@ def validate_decision(
                         "LEVEL_STALE",
                         field,
                         "Level evidence or one of its inputs is stale at the decision cutoff",
+                    )
+                elif not lineage_identity(record, by_id):
+                    error(
+                        "LEVEL_IDENTITY",
+                        field,
+                        "Derived level evidence does not preserve its input security identity",
                     )
             supported = [
                 fact

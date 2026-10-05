@@ -360,6 +360,8 @@ while not state.sufficient and state.tool_calls < budget.max_calls:
 
 The stopping rule is **evidence sufficiency**, not an arbitrary number of news items.
 
+After debate and research-manager review, a PM-model `trade_proposal` drafts the concrete PortfolioDecision. Deterministic validation is attached before aggressive, neutral and conservative risk reviews and premortem. The final PM sees the proposal, validation and reviews. A material final change returns the updated proposal through all four risk stages; at most two correction/review retries precede deferral. The checkpoint stores the proposal and a hash of the reviewed risk terms, so restart preserves completed reviews for the same terms and invalidates reviews of another proposal. Old checkpoints without that hash repeat risk review.
+
 ## 7. Research budgets
 
 Suggested initial modes:
@@ -407,7 +409,7 @@ portfolio manager
 
 The model provider must remain behind an interface so models can change without rewriting orchestration.
 
-The implementation uses three configurable model IDs (research/review, portfolio manager and an optional cheaper triage model that falls back to the research model), each with an optional reasoning-effort setting; unset means the provider default.
+The implementation uses three configurable model IDs (research/review, portfolio manager for both proposal and final decision, and an optional cheaper triage model that falls back to the research model), each with an optional reasoning-effort setting; unset means the provider default.
 
 Discovery follows the routing above:
 
@@ -463,3 +465,5 @@ Never silently fill missing evidence with guessed numbers.
 The rationale for the initial service split is token ownership and browser isolation. Tavily is the default search adapter and Brave is selectable; native OpenAI Responses tools provide autonomous research while direct HTML/PDF reads precede Chromium fallback. Screenshot-coordinate operations are ordinary restricted browser tools, without a model-accessible shell.
 
 There is no dependency on TradingAgents or its decision graph. Initial migration `0001` creates a new database. Migration `0002` adds `monitor_observations` and `outcomes.mature`; reports written before the action enums and gap severity load unchanged through model-level coercion (free-text actions become `DEFER` with the original text kept as a marked note; old PM gaps become blocking, old stage gaps advisory). They are not re-validated on load. Old recommendation history must be separately imported and marked as legacy if that work is authorized later. Current fixture reports are clearly synthetic and cannot emit live notifications. See [runtime and operations](RUNTIME.md) for credentials, backup, limits and live acceptance checks.
+
+Proposal review adds optional `trade_proposal` and `trade_proposal_validation` fields to report JSON, defaulting to null for older reports. No database migration or rewrite of completed reports is required. New precise plans validate ticker lineage even for old derived records. Historical runs query reports available at their cutoff, keeping future summaries and live state out of replay.

@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import ValidationError
 
@@ -11,6 +12,7 @@ from app.adapters.toss import TossAdapter
 from app.adapters.web import BraveSearch, DocumentReader, TavilySearch
 from app.config import Settings
 from app.evidence import (
+    content_hash,
     evidence_is_fresh,
     normalize_span,
     quotation_record,
@@ -39,6 +41,8 @@ from app.models import (
     ResearchSummary,
     Security,
     StageReview,
+    ValidationIssue,
+    ValidationResult,
     new_evidence_id,
     utcnow,
 )
@@ -60,22 +64,25 @@ from app.tools import (
 from app.validation import validate_decision
 
 # (model-requested tool calls, seconds). Reasoning-model calls take 15-30 s each and every
-# mode runs eleven stages, so elapsed time must cover at least that.
+# mode runs twelve stages, so elapsed time must cover at least that.
 BUDGETS = {"quick": (10, 900), "normal": (30, 1800), "deep": (80, 3600), "critical": (150, 5400)}
 # Cost-weighted tokens (see billable_tokens). A live quick run used ~320k; a run cut off before
 # the PM wastes everything spent, so the ceilings keep a margin for correction retries.
 TOKEN_BUDGETS = {"quick": 450_000, "normal": 900_000, "deep": 1_800_000, "critical": 3_000_000}
-STAGES = [
+DEBATE_STAGES = [
     "bull",
     "bear",
     "bull_rebuttal",
     "bear_rebuttal",
     "research_manager",
+]
+RISK_STAGES = [
     "aggressive_risk",
     "neutral_risk",
     "conservative_risk",
     "premortem",
 ]
+STAGES = DEBATE_STAGES + RISK_STAGES
 STAGE_SCHEMAS = {"research_manager": ResearchManagerReview}
 # Context limits: the model sees an index and short previews and reads details on demand.
 INDEX_FACTS = 40
@@ -112,6 +119,48 @@ def parse_review(role: str, data: dict) -> StageReview:
         return schema.model_validate(data)
     except ValidationError:
         return StageReview.model_validate(data)
+
+
+def _risk_terms(decision: PortfolioDecision) -> dict:
+    """Terms requiring renewed risk review; explanatory wording and citations may change."""
+
+    def amount(value: Decimal | None):
+        if value is None:
+            return None
+        text = format(value, "f")
+        return text.rstrip("0").rstrip(".") if "." in text else text
+
+    plan, guard = decision.trade_plan, decision.position_guard
+    return {
+        "rating": decision.rating.value,
+        "new_entry_action": decision.new_entry_action.value,
+        "holder_action": decision.holder_action.value,
+        "thesis_state": decision.thesis_state,
+        "invalidation_conditions": decision.invalidation_conditions,
+        "trade_plan": {
+            "currency": plan.currency,
+            "entry_low": amount(plan.entry_low.value),
+            "entry_high": amount(plan.entry_high.value),
+            "stop": amount(plan.stop.value),
+            "targets": [amount(level.value) for level in plan.targets],
+            "quantity": amount(plan.quantity),
+            "reward_risk": amount(plan.reward_risk),
+            "sizing_unit": plan.sizing_unit,
+            "conditions": plan.conditions,
+            "invalidation": plan.invalidation,
+            "horizon": plan.horizon,
+            "no_trade_conditions": plan.no_trade_conditions,
+        }
+        if plan
+        else None,
+        "position_guard": {
+            "currency": guard.currency,
+            "stop": amount(guard.stop.value),
+            "take_profit": [amount(level.value) for level in guard.take_profit],
+        }
+        if guard
+        else None,
+    }
 
 
 def _compact(value, depth=0):
@@ -261,14 +310,17 @@ class ResearchEngine:
             checkpoint["execution_started_at"] = utcnow().isoformat()
         limit, seconds = BUDGETS[request.mode]
         historical = request.as_of is not None
-        if historical and not tools.records:
-            # Replay only persisted snapshots. Never fetch today's data into a historical run.
-            previous = self.store.previous(request.ticker)
-            if previous:
-                self._replay(run_id, previous.run_id, request.as_of, tools)
-        previous = self.store.previous(request.ticker)
+        previous = self.store.previous(
+            request.ticker,
+            as_of=request.as_of,
+            fixture=self.settings.mode == "fixture",
+        )
         if previous and previous.fixture != (self.settings.mode == "fixture"):
             previous = None
+        if historical and not tools.records:
+            # Replay only persisted snapshots. Never fetch today's data into a historical run.
+            if previous:
+                self._replay(run_id, previous.run_id, request.as_of, tools)
         prior_traces = self.store.traces(run_id)
         tool_traces = [t for t in prior_traces if t.get("kind") == "tool"]
         # The mode's tool budget covers model-requested calls; baseline collection is fixed.
@@ -380,6 +432,8 @@ class ResearchEngine:
                     "open_gaps": advisory_gaps(),
                     "tool_budget_remaining": 0 if historical else max(0, limit - count),
                     "previous_report": self._previous_summary(previous) if previous else None,
+                    "trade_proposal": checkpoint.get("trade_proposal"),
+                    "trade_proposal_validation": checkpoint.get("trade_proposal_validation"),
                     "instructions": extra,
                 },
                 ensure_ascii=False,
@@ -527,33 +581,16 @@ class ResearchEngine:
                 checkpoint["research"] = research.model_dump(mode="json")
                 self.store.checkpoint(run_id, checkpoint)
             research = ResearchSummary.model_validate(checkpoint["research"])
-            for role in STAGES:
+            for role in DEBATE_STAGES:
                 if role not in checkpoint:
                     schema = STAGE_SCHEMAS.get(role, StageReview)
                     checkpoint[role] = ask(role, schema).model_dump(mode="json")
                     self.store.checkpoint(run_id, checkpoint)
-            quotes = [
-                r
-                for r in tools.records
-                if r.evidence_type == "quote" and r.ticker == request.ticker
-            ]
-            if not historical and quotes and not evidence_is_fresh(quotes[-1], utcnow()):
-                execute("market_quote", {"ticker": request.ticker}, baseline=True)
-            decision = ask("portfolio_manager", PortfolioDecision)
-            rejected = []
-            issues_from_research = validate_claims(
-                [c for s in research.sections for c in s.claims], tools.records, utcnow()
-            )
-            issues_from_reviews = validate_claims(
-                [c for role in STAGES for c in parse_review(role, checkpoint[role]).claims],
-                tools.records,
-                utcnow(),
-            )
             binding = self._binding_gaps(
                 research, parse_review("research_manager", checkpoint["research_manager"])
             )
-            for attempt in range(3):
-                # A PM call can outlast the 90 s quote window; validate against a current price.
+
+            def refresh_quote():
                 latest = [
                     r
                     for r in tools.records
@@ -561,15 +598,108 @@ class ResearchEngine:
                 ]
                 if not historical and latest and not evidence_is_fresh(latest[-1], utcnow()):
                     execute("market_quote", {"ticker": request.ticker}, baseline=True)
-                validation = validate_decision(
-                    decision,
+
+            def validate_current(proposal, roles=STAGES):
+                # Any model call can outlast the quote window. Historical claims use the cutoff.
+                refresh_quote()
+                at = request.as_of or utcnow()
+                result = validate_decision(
+                    proposal,
                     tools.records,
                     request,
-                    request.as_of or utcnow(),
+                    at,
                     blocking_gaps=binding,
                 )
-                validation.issues += issues_from_research + issues_from_reviews
-                validation.valid = not validation.issues
+                claims = [c for section in research.sections for c in section.claims]
+                claims += [
+                    claim
+                    for role in roles
+                    if role in checkpoint
+                    for claim in parse_review(role, checkpoint[role]).claims
+                ]
+                result.issues += validate_claims(claims, tools.records, at)
+                result.valid = not result.issues
+                return result
+
+            def review_proposal(proposal):
+                signature = content_hash(_risk_terms(proposal))
+                if checkpoint.get("risk_proposal_hash") != signature:
+                    # Legacy checkpoints have risk reviews but no reviewed proposal. Rebuild them.
+                    for role in RISK_STAGES:
+                        checkpoint.pop(role, None)
+                checkpoint["trade_proposal"] = proposal.model_dump(mode="json")
+                checkpoint["trade_proposal_validation"] = validate_current(
+                    proposal, DEBATE_STAGES
+                ).model_dump(mode="json")
+                checkpoint["risk_proposal_hash"] = signature
+                self.store.trace(
+                    run_id,
+                    {
+                        "kind": "trade_proposal",
+                        "proposal": checkpoint["trade_proposal"],
+                        "validation": checkpoint["trade_proposal_validation"],
+                        "risk_proposal_hash": signature,
+                        "at": utcnow().isoformat(),
+                    },
+                )
+                self.store.checkpoint(run_id, checkpoint)
+                for role in RISK_STAGES:
+                    if role not in checkpoint:
+                        checkpoint[role] = ask(
+                            role,
+                            StageReview,
+                            {
+                                "instruction": "Review the current trade_proposal, including "
+                                "its entry, stop, targets, size, conditions and holding guard. "
+                                "Use trade_proposal_validation to identify unsupported or "
+                                "invalid terms; do not treat the provisional draft as approved.",
+                            },
+                        ).model_dump(mode="json")
+                        self.store.checkpoint(run_id, checkpoint)
+
+            refresh_quote()
+            proposal = (
+                PortfolioDecision.model_validate(checkpoint["trade_proposal"])
+                if "trade_proposal" in checkpoint
+                else ask(
+                    "trade_proposal",
+                    PortfolioDecision,
+                    {
+                        "instruction": "Propose a concrete provisional decision for the risk "
+                        "committee after the research manager. Supply supported trade levels "
+                        "and holding guards where appropriate; omit unsupported sizing. This "
+                        "is a draft, not the final portfolio decision.",
+                    },
+                )
+            )
+            review_proposal(proposal)
+            decision = ask("portfolio_manager", PortfolioDecision)
+            rejected = []
+            for attempt in range(3):
+                validation = validate_current(decision)
+                if validation.valid and _risk_terms(decision) != _risk_terms(proposal):
+                    if attempt == 2 or exhausted():
+                        validation.issues.append(
+                            ValidationIssue(
+                                code="UNREVIEWED_PLAN",
+                                field="trade_plan",
+                                message="Final risk terms changed without completed committee review",
+                            )
+                        )
+                        validation.valid = False
+                    else:
+                        proposal = decision
+                        review_proposal(proposal)
+                        decision = ask(
+                            "portfolio_manager",
+                            PortfolioDecision,
+                            {
+                                "instruction": "The revised trade_proposal has now been reviewed "
+                                "by all risk perspectives. Finalize using those reviews. A "
+                                "further material change requires another committee review.",
+                            },
+                        )
+                        continue
                 if validation.valid:
                     break
                 rejected.append(decision)
@@ -678,6 +808,16 @@ class ResearchEngine:
             previous_report_id=previous.run_id if previous else None,
             tool_calls=count + baseline_count,
             limitations=["Synthetic offline fixture"] if self.settings.mode == "fixture" else [],
+            trade_proposal=(
+                PortfolioDecision.model_validate(checkpoint["trade_proposal"])
+                if "trade_proposal" in checkpoint
+                else None
+            ),
+            trade_proposal_validation=(
+                ValidationResult.model_validate(checkpoint["trade_proposal_validation"])
+                if "trade_proposal_validation" in checkpoint
+                else None
+            ),
         )
         report.candidate_state = candidate_state(report, tools.records, previous)
         inherit_guard(report, previous)

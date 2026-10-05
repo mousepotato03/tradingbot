@@ -79,6 +79,8 @@ uv run ruff format --check src tests migrations
 
 v0.1은 Toss 읽기 전용 계좌·시세·봉·수수료, SEC 공시·재무, Brave 검색, HTML/PDF reader, 격리된 Chromium worker, OpenAI tool calling, 강세/약세 논쟁·리스크 위원회·PM, 증거/수치 검증, 후보 감시·변화 알림·성과 기록을 구현했다. SQLite fixture 실행과 PostgreSQL/Alembic 기반 Compose 배포 구성을 제공한다.
 
+현재 흐름은 research manager 뒤에 구체적인 거래 초안과 수치 검증 결과를 만든 후 리스크 위원회·최종 PM을 거친다. 최종 위험 조건이 바뀌면 위원회가 다시 검토한다. 다른 종목의 파생 가격 근거, 인용문 뒤의 무관한 단위, 참조로 뒷받침되지 않은 추가 숫자, 과거 분석에 미래 보고서가 섞이는 경로도 검증한다. 변경 내용과 회귀 테스트는 [구현 계획](docs/IMPLEMENTATION_PLAN.md)에 정리했다.
+
 v0.2에서는 코드 리뷰 결과를 반영했다(상세: [Implementation Plan](docs/IMPLEMENTATION_PLAN.md#v02-review-fixes)).
 - 판단 구조: 등급·행동·논지·거래안 일관성 계약, gap 심각도, 인용 span 검증
 - 감사 가능성: 감시 관측값 분리, 파생 근거의 freshness 계보

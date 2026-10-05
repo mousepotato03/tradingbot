@@ -312,8 +312,26 @@ class Store:
                 raise KeyError(run_id)
             return ResearchReport.model_validate(row.body)
 
-    def previous(self, ticker: str) -> ResearchReport | None:
+    def previous(
+        self, ticker: str, as_of: datetime | None = None, fixture: bool | None = None
+    ) -> ResearchReport | None:
         with self.transaction() as session:
+            if as_of is not None:
+                # The live state points at today's latest report, not the report available then.
+                rows = session.scalars(
+                    select(ReportRow)
+                    .where(ReportRow.ticker == ticker, ReportRow.created_at <= as_of)
+                    .order_by(ReportRow.created_at.desc())
+                )
+                for row in rows:
+                    report = ResearchReport.model_validate(row.body)
+                    if (
+                        report.created_at <= as_of
+                        and report.as_of <= as_of
+                        and (fixture is None or report.fixture == fixture)
+                    ):
+                        return report
+                return None
             state = session.get(StateRow, ticker)
             if state is None or not state.report_id:
                 return None

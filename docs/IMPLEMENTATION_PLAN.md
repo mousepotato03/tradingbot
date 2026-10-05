@@ -26,6 +26,11 @@ A code review of v0.1 found decision, audit, safety and scale defects. They are 
 | P0 | Gap severity; only research manager/PM bind; 판단 보류 must name a blocking gap | Engine tests with advisory vs binding gaps |
 | P0 | Enumerated new-entry/holder actions; rating × action × thesis × plan matrix | Full cartesian test of every cell |
 | P0 | Evidence-backed thesis required for every tradeable rating | Validator tests |
+| P0 | Preserve security identity in technical/extracted/calculated evidence and validate level lineage | Peer-price and mislabeled legacy holding-stop regressions |
+| P0 | Check every numeric prose token against verified references or quotes | Extra-value, sign and scientific-notation regressions |
+| P0 | Select previous report and replay source at the historical cutoff | Future-summary exclusion and earlier-report replay tests |
+| P0 | Concrete PM-model proposal and validation before risk review; review material final revisions | Committee-context, changed-stop, bounded-deferral and restart tests |
+| P1 | Extraction units/currency limited to quote and preceding context | Unrelated following scale/currency regressions |
 | P0 | Evidence index context, bounded tool previews, condensed history, read-only `evidence_read` | Context-size and prune tests |
 | P0 | `monitor_observations`; completed evidence immutable | Monitor and storage tests |
 | P0 | Watch stores the base request; follow-ups inherit it with a `trigger` | Inheritance test |
@@ -193,10 +198,12 @@ Every material factual statement must reference evidence IDs.
 
 Implement:
 
+- provisional trade proposal and deterministic validation
 - aggressive risk review
 - neutral risk review
 - conservative risk review
 - final portfolio manager
+- renewed committee review for material final changes, with bounded retries
 
 Canonical rating:
 

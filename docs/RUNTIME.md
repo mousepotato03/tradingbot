@@ -99,7 +99,7 @@ CLI의 `research TICKER --request request.json --enqueue`도 같은 작업을 �
 | deep | 80 | 60분 | 1,800,000 |
 | critical | 150 | 90분 | 3,000,000 |
 
-예산은 목표가 아니라 상한이다. 모든 모드가 11단계(director, 토론 4, research manager, 리스크 3, premortem, PM)를 거치고 reasoning 모델 호출은 한 번에 15~30초가 걸리므로, 시간과 token 상한은 그만큼을 전제로 한다.
+예산은 목표가 아니라 상한이다. 모든 모드가 12단계(director, 토론 4, research manager, 거래 초안, 리스크 3, premortem, 최종 PM)를 거친다. 초안도 설정된 PM 모델·reasoning effort를 쓴다. reasoning 모델 호출은 한 번에 15~30초가 걸리므로, 시간과 token 상한은 그만큼을 전제로 한다. 초안 단계가 추가되어 모델 비용·시간이 늘며 기존 상한 안에서 수행한다.
 
 - **도구 한도:** 모델이 요청한 호출만 센다. 기본 수집(식별·시세·일봉과 기술지표·계좌·수수료·공시·재무 또는 ETF 보유종목·시가총액 계산)과 PM 직전 시세 재조회는 따로 기록하며 한도에 넣지 않는다. 도구 한도에 닿으면 이후 단계는 도구 없이 이미 모은 근거로 결론을 쓴다.
 - **판단 보류로 끝나는 한도:** 경과 시간, 비용 기준 token, model 호출 수(`도구 한도 + 24`)다.
@@ -107,13 +107,17 @@ CLI의 `research TICKER --request request.json --enqueue`도 같은 작업을 �
 
 부족하거나 충돌한 핵심 근거는 `판단 보류`로 끝낸다. 숫자나 잘못된 stop/target을 자동으로 고치지 않는다.
 
+research manager 다음에 구체적인 `trade_proposal`과 결정론적 검증 결과를 만든다. 리스크 3관점과 premortem은 이 초안의 진입·손절·목표·수량·조건·보유 감시선을 검토하고, 최종 PM이 피드백을 반영한다. 최종 결정이 검토한 행동·논지 상태·가격·수량·조건·기간·보유 감시선을 바꾸면 변경 초안을 다시 위원회에 넘긴다. 오류 교정과 재검토는 합쳐 두 번까지 허용하며 계속 변경되는 미검토 계획은 `UNREVIEWED_PLAN`으로 거절하고 판단 보류한다. JSON/Markdown 보고서에 현재 검토 초안과 검증 결과가 남고, 수정 이력은 trace에 남는다.
+
 **주장 검증 실패:** 모델에게 구체적인 오류(어떤 인용·fact가 왜 틀렸는지, 그 fact가 실제로 있는 근거 ID)를 알려 주고 한 번 수정할 기회를 준다. 그래도 틀린 주장은 그 단계에서 제외하고, `claim_removal` trace와 비차단 gap으로 남긴다. 주장 하나 때문에 조사 전체를 버리지 않는다.
 
 **근거 ID:** 짧고 종류가 드러나게 만든다. 예) `qt-…` 시세, `ta-…` 기술지표, `fin-…` SEC 재무, `pf-…` 계좌. 모델이 긴 UUID를 잘못 옮기거나 시세 근거에 기술지표 fact를 다는 오류를 줄이기 위해서다.
 
 **구조화 근거의 인용:** 시세·계좌·공시 목록처럼 본문이 없는 근거는 context에 보이는 JSON 형태(`"filed": "2026-08-26"`) 그대로 인용할 수 있다. 검증기는 키 순서나 따옴표가 아니라 기록된 필드 값과 정확히 같은지를 본다. 본문의 숫자·날짜가 모두 검증된 인용 안에 있으면 별도 숫자 참조 없이도 허용한다. 계좌 근거에는 `buying_power`와 종목별 `{ticker}.quantity`/`.average_price`/`.market_value` fact가 있고, 기술지표는 소수 4자리로 기록하며 52주 고가·저가를 포함한다.
 
-**`extract_fact`:** 원문에 적힌 숫자와 단위(`scale`)를 받는다. 저장되는 값은 숫자 × 단위다. 표 행을 인용할 때는 표 머리의 "In millions" 같은 단위 표기를 인용문 앞 6,000자 안에서 찾아 확인하고, 어디서 찾았는지 기록한다. 인용문 비교는 공백을 정규화한다.
+FACT/INTERPRETATION 문장에 나온 숫자마다 검증된 `numeric_references` 값이나 정확한 인용의 숫자와 대응해야 한다. 참조 하나를 넣어도 다른 미확인 숫자는 `UNSTRUCTURED_NUMBER`로 거절한다. 부호와 지수 표기도 비교한다. 숫자 대응 검증은 그 값이 문장 속 올바른 지표에 쓰였는지까지 증명하지 않으므로 출처 의미 검토는 계속 필요하다.
+
+**`extract_fact`:** 원문에 적힌 숫자와 단위(`scale`)를 받는다. 저장되는 값은 숫자 × 단위다. 표 행을 인용할 때는 표 머리의 "In millions" 같은 단위 표기를 인용문 자체나 앞 6,000자 안에서 찾아 확인하고, 어디서 찾았는지 기록한다. 통화도 같은 범위에서 확인하며 인용문 뒤의 다른 표기는 사용하지 않는다. 인용문 비교는 공백을 정규화한다. 기술지표·추출 fact는 원본 종목, 계산은 첫 입력 종목을 유지한다. 정밀 거래·보유 감시선은 파생 입력까지 종목 일관성을 검증하므로 다른 종목을 잘못 붙인 기존 파생 근거도 거절한다.
 
 모델 context에는 근거 원문 대신 **evidence index**가 들어간다. 각 근거마다 ID·출처·시각·freshness, 최대 40개 fact, 300자 snippet, 요약 payload만 넣는다. PDF 페이지, 봉 데이터, 브라우저 요소 목록은 넣지 않는다. 도구 결과는 index 항목과 4,000자 미리보기로 돌려주고, 한 단계 대화에서 오래된 도구 결과는 evidence ID로 축약하며 screenshot은 최신 1장만 남긴다. 세부 내용은 `evidence_read`로 필요할 때 읽는다. `evidence_read`는 읽기 전용 view이므로 새 근거를 만들지 않는다.
 
@@ -135,7 +139,7 @@ ETF(레버리지·인버스 제외)는 별도 경로로 조사한다. SEC fund t
 
 이전 버전의 `evidence_read`는 발췌문을 새 근거로 저장해 비승인 호스트 본문이 최대 24,000자까지 보존될 수 있었다. 이제 `evidence_read`는 저장하지 않는 view다. 재시작으로 재개된 run은 비승인 호스트 문서의 snippet만 갖고 있다. 그러나 이미 검증된 인용은 `quotation` 근거로 남아 있으므로 재검증할 수 있다.
 
-`as_of`는 이미 저장된 과거 snapshot만 사용한다. 해당 시점 이후 조회된 근거를 가져오지 않고 네트워크를 호출하지 않으며 live 후보 상태·알림을 변경하지 않는다. 과거 snapshot이 없으면 판단 보류다. 이 기능은 데이터 공급자의 point-in-time backfill을 대체하지 않는다.
+`as_of`는 이미 저장된 과거 snapshot만 사용한다. 이전 보고서 문맥과 replay 원본은 생성 시각·분석 기준 시각이 모두 cutoff 이전인 최신 보고서로 정하며 fixture/live도 일치해야 한다. 현재 live 상태가 가리키는 미래 보고서 요약은 넘기지 않는다. 모든 단계 claim 검증도 cutoff를 사용한다. 해당 시점 이후 조회된 근거를 가져오지 않고 네트워크를 호출하지 않으며 live 후보 상태·알림을 변경하지 않는다. 과거 snapshot이 없으면 판단 보류다. 이 기능은 데이터 공급자의 point-in-time backfill을 대체하지 않는다.
 
 ## 8. 감시·알림·평가
 
@@ -171,6 +175,8 @@ docker compose cp postgres:/tmp/research-backup.dump ./research-backup.dump
 ```
 
 migration `0002`는 `monitor_observations` 테이블과 `outcomes.mature` 컬럼을, `0003`은 검색 사용 기록 `search_usage` 테이블을 추가한다. 기존 보고서 JSON은 다시 쓰지 않는다. 자유 서술 행동은 `DEFER`와 "(이전 형식 자유 서술)" 표시가 붙은 note로 읽고, 옛 PM gap은 blocking, 단계별 gap은 non_blocking으로 읽는다.
+
+거래 초안 필드는 기존 보고서에서 null로 읽으며 추가 DB migration은 없다. 재개 checkpoint에는 검토 초안의 위험 조건 hash가 남아 같은 초안의 완료된 리스크 검토를 재사용한다. hash가 없는 옛 checkpoint의 리스크 검토는 현재 초안으로 다시 수행한다.
 
 `.env`의 비밀값은 Git이나 browser volume에 보관하지 않는다. backup에는 계좌 snapshot과 report가 포함되므로 접근을 제한한다. 복구는 worker와 API를 중지하고 별도 새 DB에 dump를 복원한 후 `alembic upgrade head`를 수행한다. 단일 worker만 시작해 남은 job을 재개한다. 운영 DB에 `init-db`, legacy schema import, Alembic 초기 revision을 강제로 stamp하는 방법을 사용하지 않는다.
 

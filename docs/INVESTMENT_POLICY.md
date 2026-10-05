@@ -37,6 +37,8 @@ The system must record:
 
 Historical analysis must not use future evidence.
 
+The previous-report summary and replay source must themselves have existed by the requested cutoff: both report creation and its analysis timestamp must be at or before `as_of`. Select the latest compatible fixture/live report meeting those conditions, rather than the current live state. All stage and final claim checks use the same historical cutoff.
+
 ## 3. Fact / interpretation / assumption
 
 All material claims are classified.
@@ -237,6 +239,8 @@ A binding blocking gap requires 판단 보류. Gaps raised by the director, deba
 ## 11. Trading plan rules
 
 Only produce precise levels when supported by verified data.
+
+After the research manager, draft the concrete decision and run deterministic validation before the risk committee. Reviewers receive the current draft and validation errors, including supported entry/stop/targets and any proposed size or holding guard. This is provisional; the final PM still decides after risk feedback. Material changes to the reviewed terms require renewed committee review. If bounded correction/review attempts cannot yield a reviewed valid final decision, defer rather than publish an unreviewed plan.
 
 ### Entry
 

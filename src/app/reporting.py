@@ -117,6 +117,33 @@ def markdown(report: ResearchReport, records: list[EvidenceRecord]) -> str:
         ]
         lines += [f"- 근거: {guard.rationale}", "- 정규장 가격으로 1분마다 확인합니다."]
     lines += ["", "# 8) 리스크 위원회", ""]
+    proposal = report.trade_proposal
+    if proposal:
+        lines += [
+            "## 위원회 검토 초안 (최종 결정은 아래 참조)",
+            "",
+            f"- 등급·행동: {proposal.rating.value} / {proposal.new_entry_action.value} / "
+            f"{proposal.holder_action.value}",
+        ]
+        if proposal.trade_plan:
+            draft = proposal.trade_plan
+            lines += [
+                f"- 초안 진입: {draft.entry_low.value} ~ {draft.entry_high.value} {draft.currency}",
+                f"- 초안 손절·목표: {draft.stop.value} / "
+                + ", ".join(str(level.value) for level in draft.targets),
+                f"- 초안 수량: {draft.quantity if draft.quantity is not None else '제안 없음'}",
+                f"- 초안 기간: {draft.horizon}",
+            ]
+            lines += [f"- 초안 조건: {c}" for c in draft.conditions + draft.no_trade_conditions]
+        if proposal.position_guard:
+            lines.append(
+                f"- 초안 보유 손절: {proposal.position_guard.stop.value} "
+                f"{proposal.position_guard.currency}"
+            )
+        if report.trade_proposal_validation:
+            result = report.trade_proposal_validation
+            lines.append(f"- 초안 수치·근거 검증: {'통과' if result.valid else '거절'}")
+            lines += [f"- 초안 검증 오류 {i.code}: {i.message}" for i in result.issues]
     for role in ("aggressive_risk", "neutral_risk", "conservative_risk", "premortem"):
         if role in report.reviews:
             review = report.reviews[role]

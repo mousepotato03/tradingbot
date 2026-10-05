@@ -223,5 +223,8 @@ def test_openai_adapter_uses_strict_contract_and_preserves_usage(settings):
     )
     OpenAIModel(tuned, client).complete("portfolio_manager", [], [], ResearchSummary)
     assert client.responses.create.call_args.kwargs["reasoning"] == {"effort": "high"}
+    OpenAIModel(tuned, client).complete("trade_proposal", [], [], ResearchSummary)
+    assert client.responses.create.call_args.kwargs["reasoning"] == {"effort": "high"}
+    assert client.responses.create.call_args.kwargs["model"] == tuned.pm_model
     OpenAIModel(tuned, client).complete("bull", [], [], ResearchSummary)
     assert client.responses.create.call_args.kwargs["reasoning"] == {"effort": "low"}

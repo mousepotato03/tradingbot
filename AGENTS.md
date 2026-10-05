@@ -36,11 +36,15 @@ data collection
 -> evidence validation
 -> autonomous research
 -> bull/bear debate
+-> provisional trade proposal + deterministic validation
 -> risk committee
 -> portfolio manager decision
 -> deterministic trade/risk validator
 -> state transition / notification
 ```
+
+Material changes to the reviewed actions, levels, sizing, conditions, horizon or holding guard
+require another committee review before publication. Exhausted correction/review attempts defer.
 
 The LLM must never be reduced to a button selector whose default is Hold.
 

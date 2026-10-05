@@ -194,8 +194,14 @@ def _number_problem(number, ledger) -> str | None:
 
 # Identifiers whose digits are names, not quantities (form types, index names).
 def _number_tokens(text: str) -> set[str]:
-    """Numbers in text, canonicalized so "08" matches "8" and "1,000" matches "1000"."""
-    return {_canonical(token.replace(",", "")) for token in re.findall(r"\d[\d,]*(?:\.\d+)?", text)}
+    """Canonical numbers, preserving signs and exponents but not date separators."""
+    return {
+        _canonical(token.replace(",", ""))
+        for token in re.findall(
+            r"(?<![\d.])[+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?",
+            text.replace("−", "-"),
+        )
+    }
 
 
 # ASCII boundaries: Korean particles attach directly ("10-Q와"), so \b would not match.
@@ -233,12 +239,15 @@ def validate_claims(claims: list[Claim], records: list[EvidenceRecord], as_of: d
                 issues.append(
                     ValidationIssue(code="UNSUPPORTED_CLAIM", field=str(i), message=reason)
                 )
+        referenced = set()
         for number in claim.numeric_references:
             problem = _number_problem(number, ledger)
             if problem:
                 issues.append(
                     ValidationIssue(code="UNSUPPORTED_NUMBER", field=str(i), message=problem)
                 )
+            else:
+                referenced.add(_canonical(number.value))
         for quote in claim.quotes:
             if not quote_supported(quote, ledger):
                 issues.append(
@@ -265,18 +274,15 @@ def validate_claims(claims: list[Claim], records: list[EvidenceRecord], as_of: d
         quoted = set().union(
             *(_number_tokens(q.text) for q in claim.quotes if quote_supported(q, ledger))
         )
-        if (
-            claim.classification != "ASSUMPTION"
-            and numbers
-            and not claim.numeric_references
-            and not numbers <= quoted
-        ):
+        uncovered = numbers - referenced - quoted
+        if claim.classification != "ASSUMPTION" and uncovered:
             issues.append(
                 ValidationIssue(
                     code="UNSTRUCTURED_NUMBER",
                     field=str(i),
-                    message="Claim text contains numbers or dates without numeric_references; "
-                    "reference the evidence facts or remove the numbers from the text",
+                    message="Claim text contains numbers or dates not covered by verified "
+                    f"references or quotes: {', '.join(sorted(uncovered))}; "
+                    "reference each exact value or keep the text qualitative",
                 )
             )
     return issues
@@ -323,6 +329,35 @@ def lineage_fresh(
         if parent is None or not lineage_fresh(parent, ledger, at, seen | {record.evidence_id}):
             return False
     return True
+
+
+def lineage_identity(
+    record: EvidenceRecord,
+    ledger: dict[str, EvidenceRecord],
+    seen: frozenset[str] = frozenset(),
+) -> bool:
+    """Derived values belong to their first input's security, including legacy records.
+
+    A calculation may use a peer ratio as its second input, but cannot relabel its first
+    input's price. Checking parents also prevents a later calculation laundering a bad label.
+    """
+    if record.evidence_id in seen:
+        return False
+    inputs = record.payload.get("input_evidence_ids", [])
+    if inputs and record.evidence_type in {
+        "technical",
+        "calculation",
+        "extracted_fact",
+        "quotation",
+    }:
+        first = ledger.get(inputs[0])
+        if first is None or first.ticker != record.ticker:
+            return False
+    return all(
+        (parent := ledger.get(input_id)) is not None
+        and lineage_identity(parent, ledger, seen | {record.evidence_id})
+        for input_id in inputs
+    )
 
 
 def persistent_record(record: EvidenceRecord) -> EvidenceRecord:
