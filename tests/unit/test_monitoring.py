@@ -130,6 +130,29 @@ def test_position_change_alerts_only_the_changed_ticker(store, watched):
     assert [a["ticker"] for a in changed] == ["BBB"] and "0 → 3" in changed[0]["content"]
 
 
+def test_sold_position_is_alerted_once_and_no_longer_watched(store, watched):
+    engine, market = watched
+    clock = Clock()
+    monitor = Monitor(engine, clock=clock)
+    market.holdings = [
+        {"ticker": "BBB", "currency": "USD", "quantity": "3", "market_value": "300", "sector": None}
+    ]
+    due_now(store, "AAA", "BBB", "CCC")
+    monitor.tick()
+    market.holdings = []
+    clock.now += 301
+    due_now(store, "AAA", "BBB", "CCC")
+    monitor.tick()
+    with store.transaction() as session:
+        assert session.get(WatchRow, "BBB") is None
+        sold = [
+            r.body
+            for r in session.scalars(select(OutboxRow))
+            if r.body["kind"] == "POSITION_CHANGED" and "3 → 0" in r.body["content"]
+        ]
+    assert [a["ticker"] for a in sold] == ["BBB"]
+
+
 def test_account_failure_alerts_only_held_positions(store, watched):
     engine, market = watched
     market.fail_account = True

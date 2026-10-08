@@ -179,6 +179,15 @@ class Monitor:
                         f"(근거: {level.basis})"
                     )
 
+    @staticmethod
+    def _was_held(body, old_quantity, previous) -> bool:
+        """True when the watch exists for a position the investor held, not a candidate."""
+        return bool(
+            body.get("origin") == "holding"
+            or (old_quantity is not None and Decimal(old_quantity) > 0)
+            or (previous and previous.candidate_state == CandidateState.ACTIVE)
+        )
+
     def tick(self):
         now = utcnow()
         account, account_error, account_new = self._account_snapshot()
@@ -236,6 +245,7 @@ class Monitor:
                     details["DATA_QUALITY_FAILURE"] = (
                         f"가격 근거 조회 실패: {error}; 기존 거래안과 손절선을 재검증해야 합니다."
                     )
+            retire = False
             if previous and account_new:
                 if account is not None:
                     quantity = str(
@@ -255,6 +265,21 @@ class Monitor:
                             f"보유 수량 변경: {ticker} {old} → {quantity}주"
                         )
                     body["quantity"] = quantity
+                    retire = Decimal(quantity) == 0 and self._was_held(body, old, previous)
+                    if retire:
+                        # A sold position has nothing left to protect: report the sale once and
+                        # stop researching it on schedule instead of re-queuing it forever.
+                        sold = old is not None and Decimal(old) > 0
+                        signals = {"POSITION_CHANGED"} if sold else set()
+                        details = (
+                            {
+                                "POSITION_CHANGED": f"보유 수량 변경: {ticker} {old} → 0주 "
+                                "(전량 청산). 자동 감시와 정기 재조사를 종료합니다."
+                            }
+                            if sold
+                            else {}
+                        )
+                        error = None
                 elif previous.candidate_state == CandidateState.ACTIVE:
                     # Account data only affects the current decision for held positions.
                     error = error or account_error
@@ -273,18 +298,25 @@ class Monitor:
                     .where(RunRow.ticker == ticker, RunRow.status.in_(["PENDING", "RUNNING"]))
                     .limit(1)
                 )
+                if retire and pending is not None:
+                    # A running report would recreate the watch when it commits; retire next tick.
+                    row.next_condition_at = now + timedelta(seconds=60)
+                    continue
                 due = (
                     row.next_research_at.replace(tzinfo=now.tzinfo)
                     if row.next_research_at.tzinfo is None
                     else row.next_research_at
                 )
-                if pending is None and (due <= now or new_signals):
+                if not retire and pending is None and (due <= now or new_signals):
                     queued = True
                     row.next_research_at = next_research_at(
                         self.engine.settings, self.engine.market, now
                     )
-                row.next_condition_at = now + timedelta(seconds=60)
-                row.body = {**body, "signals": sorted(signals), "last_error": error}
+                if retire:
+                    session.delete(row)
+                else:
+                    row.next_condition_at = now + timedelta(seconds=60)
+                    row.body = {**body, "signals": sorted(signals), "last_error": error}
                 for signal in new_signals:
                     event_id = content_hash(
                         {
@@ -303,7 +335,9 @@ class Monitor:
                                     "fixture": self.engine.settings.mode == "fixture",
                                     "expires_at": (now + timedelta(minutes=15)).isoformat(),
                                     "kind": signal,
-                                    "content": signal_content(
+                                    "content": details[signal]
+                                    if retire
+                                    else signal_content(
                                         ticker, signal, details[signal], previous
                                     ),
                                 },
