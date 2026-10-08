@@ -37,15 +37,15 @@ echo "==> DB migration"
 .venv/bin/alembic upgrade head
 
 echo "==> 기존 워커 종료"
-if pgrep -f '/\.venv/bin/tradingbot worker' >/dev/null; then
-  pkill -TERM -f '/\.venv/bin/tradingbot worker' || true
+if pgrep -f '\.venv/bin/tradingbot worker' >/dev/null; then
+  pkill -TERM -f '\.venv/bin/tradingbot worker' || true
   for _ in $(seq 1 30); do
-    pgrep -f '/\.venv/bin/tradingbot worker' >/dev/null || break
+    pgrep -f '\.venv/bin/tradingbot worker' >/dev/null || break
     sleep 1
   done
-  if pgrep -f '/\.venv/bin/tradingbot worker' >/dev/null; then
+  if pgrep -f '\.venv/bin/tradingbot worker' >/dev/null; then
     echo "30초 안에 종료되지 않아 강제 종료합니다" >&2
-    pkill -KILL -f '/\.venv/bin/tradingbot worker' || true
+    pkill -KILL -f '\.venv/bin/tradingbot worker' || true
     sleep 1
   fi
 else
@@ -55,12 +55,12 @@ fi
 echo "==> 워커 시작"
 nohup .venv/bin/tradingbot worker >>"$log" 2>&1 &
 sleep 3
-if ! pgrep -f '/\.venv/bin/tradingbot worker' >/dev/null; then
+if ! pgrep -f '\.venv/bin/tradingbot worker' >/dev/null; then
   echo "워커가 바로 종료됐습니다. 로그:" >&2
   tail -n "$logs" "$log" >&2
   exit 1
 fi
 
-echo "==> 실행 중: $(pgrep -f '/\.venv/bin/tradingbot worker' | tr '\n' ' ')"
+echo "==> 실행 중: $(pgrep -f '\.venv/bin/tradingbot worker' | tr '\n' ' ')"
 echo "==> 로그 (${log} 마지막 ${logs}줄)"
 tail -n "$logs" "$log"
