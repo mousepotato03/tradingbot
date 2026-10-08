@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # VM에서 실행: 최신 코드를 받아 이미지를 다시 빌드하고 프로세스를 재기동한다.
-#   ./deploy/update.sh              기본 서비스 갱신
-#   ./deploy/update.sh --browser    Chromium browser worker 프로필 포함
-#   ./deploy/update.sh --logs 200   반영 후 워커 로그 줄 수 (기본 60)
+#   ./update.sh              기본 서비스 갱신
+#   ./update.sh --browser    Chromium browser worker 프로필 포함
+#   ./update.sh --logs 200   반영 후 워커 로그 줄 수 (기본 60)
 set -euo pipefail
 
 profile=()
@@ -16,7 +16,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "VM 작업 트리에 커밋되지 않은 변경이 있습니다. 확인 후 다시 실행하세요." >&2
