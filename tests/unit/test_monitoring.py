@@ -126,8 +126,13 @@ def test_position_change_alerts_only_the_changed_ticker(store, watched):
     monitor.tick()
     with store.transaction() as session:
         alerts = [r.body for r in session.scalars(select(OutboxRow))]
-    changed = [a for a in alerts if a["kind"] == "POSITION_CHANGED"]
-    assert [a["ticker"] for a in changed] == ["BBB"] and "0 → 3" in changed[0]["content"]
+        triggers = {
+            r.ticker: r.request.get("trigger", "")
+            for r in session.scalars(select(RunRow).where(RunRow.status == "PENDING"))
+        }
+    # The position change is reported by the follow-up research alert, not as a second message.
+    assert not [a for a in alerts if a["kind"] == "POSITION_CHANGED"]
+    assert "0 → 3" in triggers["BBB"] and "POSITION_CHANGED" not in triggers.get("AAA", "")
 
 
 def test_sold_position_is_alerted_once_and_no_longer_watched(store, watched):
@@ -169,9 +174,9 @@ def test_account_failure_alerts_only_held_positions(store, watched):
     Monitor(engine, clock=Clock()).tick()
     with store.transaction() as session:
         failures = [
-            r.body["ticker"]
-            for r in session.scalars(select(OutboxRow))
-            if r.body["kind"] == "DATA_QUALITY_FAILURE"
+            r.ticker
+            for r in session.scalars(select(RunRow).where(RunRow.status == "PENDING"))
+            if "DATA_QUALITY_FAILURE" in r.request.get("trigger", "")
         ]
     assert failures == ["AAA"]
 

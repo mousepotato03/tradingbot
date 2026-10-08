@@ -21,6 +21,7 @@ from app.evidence import (
 from app.lifecycle import (
     candidate_state,
     changes,
+    folded_trigger,
     guard_of,
     inherit_guard,
     own_guard,
@@ -827,6 +828,7 @@ class ResearchEngine:
                 report,
                 tools.records,
                 self.store.evidence(previous.run_id) if previous else [],
+                folded_trigger(request.trigger),
             )
             if request.report_policy != "none"
             else []

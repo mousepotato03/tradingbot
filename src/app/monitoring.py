@@ -21,6 +21,8 @@ PRICE_SIGNALS = (
     "HOLDER_STOP",
     "HOLDER_TAKE_PROFIT_",
 )
+# Signals whose only action is a re-research; that report's alert carries them (one message).
+FOLDED_SIGNALS = {"POSITION_CHANGED", "DATA_QUALITY_FAILURE"}
 SEOUL = ZoneInfo("Asia/Seoul")
 SIGNAL_LABELS = {
     "INVALIDATION_PRICE": "무효화 가격 도달",
@@ -318,6 +320,8 @@ class Monitor:
                     row.next_condition_at = now + timedelta(seconds=60)
                     row.body = {**body, "signals": sorted(signals), "last_error": error}
                 for signal in new_signals:
+                    if signal in FOLDED_SIGNALS and not retire and (queued or pending):
+                        continue  # the follow-up research alert reports it with the decision
                     event_id = content_hash(
                         {
                             "ticker": ticker,

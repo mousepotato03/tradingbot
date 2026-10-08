@@ -195,6 +195,7 @@ def changes(
     current: ResearchReport,
     records: list[EvidenceRecord] | None = None,
     previous_records: list[EvidenceRecord] | None = None,
+    trigger: str = "",
 ) -> list[dict]:
     """At most one alert for a report, listing everything that changed since the previous one."""
     if previous is None:
@@ -239,7 +240,19 @@ def changes(
     evidence = new_evidence_claims(previous, current, records, previous_records)
     if evidence:
         differences.append(("MATERIAL_EVIDENCE", f"새 근거 {len(evidence)}건"))
-    return [report_alert(current, differences, evidence)] if differences else []
+    if differences or trigger:
+        return [report_alert(current, differences, evidence, trigger)]
+    return []
+
+
+def folded_trigger(trigger: str | None) -> str:
+    """Monitor signals that were left to the research alert (position / data-quality events)."""
+    parts = [
+        part.split(": ", 1)[1]
+        for part in (trigger or "").split("; ")
+        if part.startswith(("POSITION_CHANGED: ", "DATA_QUALITY_FAILURE: "))
+    ]
+    return " / ".join(parts)
 
 
 def _clip(text: str, limit: int = ALERT_ITEM_CHARACTERS) -> str:
@@ -260,6 +273,7 @@ def report_alert(
     current: ResearchReport,
     differences: list[tuple[str, str]],
     evidence: Sequence[str] = (),
+    trigger: str = "",
 ) -> dict:
     """The single alert for a report: what changed, the decision, why it defers, what is new."""
     decision = current.decision
@@ -274,6 +288,8 @@ def report_alert(
     changed = [text for _, text in differences if text]
     if changed:
         lines.append("변경: " + " · ".join(changed))
+    if trigger:
+        lines.append("계기: " + _clip(trigger))
     lines.append(
         f"신규: {ACTION_LABELS[decision.new_entry_action]} · "
         f"보유: {ACTION_LABELS[decision.holder_action]}"

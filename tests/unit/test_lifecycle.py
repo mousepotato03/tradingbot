@@ -215,3 +215,14 @@ def test_outcomes_mature_once_and_deferrals_settle(store, settings):
         assert rows[held.run_id].mature and "60" in rows[held.run_id].body["metrics"]
         assert rows[deferred.run_id].mature and "skipped" in rows[deferred.run_id].body
     assert tracker.update() == 0 and Counting.calls == 2
+
+
+def test_folded_trigger_keeps_only_signals_left_to_the_research_alert():
+    from app.lifecycle import folded_trigger
+
+    trigger = (
+        "POSITION_CHANGED: 보유 수량 변경: AAA 3 → 5주; "
+        "HOLDER_STOP: 현재가 9 ≤ 보유 손절선 10; DATA_QUALITY_FAILURE: 가격 근거 조회 실패"
+    )
+    assert folded_trigger(trigger) == "보유 수량 변경: AAA 3 → 5주 / 가격 근거 조회 실패"
+    assert folded_trigger("정기 재조사: 24시간 경과") == "" and folded_trigger(None) == ""
