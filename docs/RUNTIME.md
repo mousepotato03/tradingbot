@@ -61,7 +61,7 @@ curl http://127.0.0.1:8000/health
 docker compose logs --tail 100 research-worker browser-worker
 ```
 
-로컬 Windows에서는 `deploy/deploy.ps1`이 테스트, push, VM의 `git merge --ff-only`, `docker compose up -d --build`, 상태·로그 확인을 한 번에 실행한다. VM 주소·사용자·키·경로는 `TRADINGBOT_DEPLOY_HOST/USER/KEY/PATH` 환경변수 또는 인자로 지정하며 저장소에 두지 않는다. `-SkipTests`, `-Browser`, `-Logs N` 옵션이 있다.
+VM에서는 `./deploy/update.sh`가 `git pull --ff-only`, `docker compose up -d --build`, 상태·워커 로그 확인을 한 번에 실행한다. `--browser`, `--logs N` 옵션이 있고, VM 작업 트리에 커밋되지 않은 변경이 있으면 중단한다.
 
 `postgres → migrate → research-api/research-worker` 순서로 시작한다. 기본 구성은 postgres, migrate(1회 실행), research-api, research-worker, egress-proxy다. Chromium browser worker는 문서를 직접 읽을 수 없을 때만 쓰는 선택 기능이며 메모리를 1.5GB까지 쓴다. 그래서 기본으로 띄우지 않고 모델에게 브라우저 도구도 주지 않는다. 쓰려면 `.env`에 `TRADINGBOT_BROWSER_ENABLED=true`를 넣고 `docker compose --profile browser up -d --build`로 띄운다. PostgreSQL 18의 `/var/lib/postgresql`과 `.research`를 볼륨에 저장한다. API는 호스트 `127.0.0.1:8000`에만 열며 SSH tunnel 등으로 접근한다. 별도 인증 없이 공개 포트로 노출하지 않는다. 모든 서비스는 JSON 로그를 10 MB × 3개로 회전한다.
 
