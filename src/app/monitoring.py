@@ -341,9 +341,7 @@ class Monitor:
                                     "kind": signal,
                                     "content": details[signal]
                                     if retire
-                                    else signal_content(
-                                        ticker, signal, details[signal], previous
-                                    ),
+                                    else signal_content(ticker, signal, details[signal], previous),
                                 },
                             )
                         )
