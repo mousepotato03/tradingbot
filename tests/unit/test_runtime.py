@@ -80,6 +80,31 @@ def test_outside_entry_range_keeps_watch_candidate_and_monitor_detects_hit(store
     assert len(observed) == 2 and observed[-1].facts[0].value == entry
 
 
+def test_prune_removes_only_old_routine_observations(store):
+    market, now = FixtureAdapters(), utcnow()
+
+    def observe(kind, record, days_ago):
+        stamp = now - timedelta(days=days_ago)
+        record = record.model_copy(
+            update={
+                "evidence_id": f"{kind}-{days_ago}",
+                "retrieved_at": stamp,
+                "effective_at": record.effective_at and stamp,
+                "published_at": record.published_at and stamp,
+            }
+        )
+        store.add_observation("TEST", kind, record)
+
+    observe("quote", market.quote("TEST"), 20)
+    observe("quote", market.quote("TEST"), 1)
+    observe("account", market.account_snapshot(), 20)
+    observe("screening", market.quote("TEST"), 20)
+    assert store.prune_observations(now - timedelta(days=14)) == 2
+    assert [r.evidence_id for r in store.observations("TEST", "quote")] == ["quote-1"]
+    assert store.observations("TEST", "account") == []
+    assert len(store.observations("TEST", "screening")) == 1
+
+
 def test_closed_session_retains_valid_plan_as_watch(store, settings):
     class ClosedMarket(FixtureAdapters):
         def quote(self, ticker):

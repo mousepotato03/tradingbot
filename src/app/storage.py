@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    delete,
     func,
     inspect,
     select,
@@ -277,6 +278,20 @@ class Store:
                 query = query.where(ObservationRow.kind == kind)
             rows = session.scalars(query.order_by(ObservationRow.observed_at)).all()
             return [EvidenceRecord.model_validate(row.body) for row in rows]
+
+    def prune_observations(self, before: datetime, kinds=("quote", "account")) -> int:
+        """Delete routine per-minute monitor reads older than `before`.
+
+        Reports keep their own evidence ledger and alerts keep their text, so old quote/account
+        reads are not needed to audit a decision. Screening observations are kept.
+        """
+        with self.transaction() as session:
+            result = session.execute(
+                delete(ObservationRow).where(
+                    ObservationRow.kind.in_(kinds), ObservationRow.observed_at < before
+                )
+            )
+            return result.rowcount
 
     def consume_search(self, provider: str, run_id: str | None, limit: int | None) -> bool:
         """Record one search if the rolling 30-day count is below `limit`.

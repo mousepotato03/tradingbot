@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     # Shared account snapshot reuse window inside one process (monitor and research reads).
     account_cache_seconds: int = 60
     monitor_account_interval_seconds: int = 300
+    # Per-minute quote/account monitor reads are deleted after this many days.
+    observation_retention_days: int = Field(default=14, ge=1)
     # USD holdings found in the account are watched and researched automatically.
     holdings_auto_watch: bool = True
     # Each watch is re-researched daily; quick keeps model and search usage low.

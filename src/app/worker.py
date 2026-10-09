@@ -2,11 +2,13 @@ import logging
 import signal
 import threading
 import time
+from datetime import timedelta
 
 from app.config import Settings
 from app.discovery import Discovery
 from app.engine import ResearchEngine
 from app.evaluation import OutcomeTracker
+from app.models import utcnow
 from app.monitoring import Monitor
 from app.notifications import DiscordNotifier
 from app.storage import Store
@@ -35,13 +37,18 @@ def serve(settings: Settings | None = None):
                 logging.error("Scheduler operation failed error_class=%s", type(error).__name__)
             stopped.wait(10)
 
+    def prune():
+        cutoff = utcnow() - timedelta(days=settings.observation_retention_days)
+        logging.info("Pruned monitor observations count=%s", store.prune_observations(cutoff))
+
     def maintenance():
         # Discovery triage (model calls) and outcome refresh are slow; keep them off the
         # condition-monitoring loop so entry/stop checks stay on schedule.
-        due = {"discovery": 0.0, "evaluation": 0.0}
+        due = {"discovery": 0.0, "evaluation": 0.0, "prune": 0.0}
         jobs = {
             "discovery": lambda: Discovery(engine).scan(),
             "evaluation": lambda: OutcomeTracker(engine).update(),
+            "prune": prune,
         }
         while not stopped.is_set():
             for name, job in jobs.items():
