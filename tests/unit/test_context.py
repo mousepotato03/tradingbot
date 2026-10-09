@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from app.adapters.fixture import FixtureAdapters
 from app.engine import FULL_TOOL_OUTPUTS, ResearchEngine
-from app.llm import FixtureModel, FunctionCall, ModelTurn
+from app.llm import FixtureModel, FunctionCall, ModelTurn, request_context
 from app.models import (
     MaterialGap,
     ResearchManagerReview,
@@ -144,7 +144,7 @@ def test_pm_sees_open_gaps_from_every_stage(store, settings):
     class Watching(Gaps):
         def complete(self, role, messages, tools, schema):
             if role == "portfolio_manager":
-                seen.append(json.loads(messages[1]["content"])["open_gaps"])
+                seen.append(request_context(messages)["open_gaps"])
             return super().complete(role, messages, tools, schema)
 
     ResearchEngine(settings, store, model=Watching()).run(
@@ -177,7 +177,7 @@ def test_follow_up_quotes_are_persisted_as_quotation_evidence(store, settings):
         def complete(self, role, messages, tools, schema):
             turn = super().complete(role, messages, tools, schema)
             if role == "bull":
-                context = json.loads(messages[1]["content"])
+                context = request_context(messages)
                 document = next(e for e in context["evidence"] if e["evidence_type"] == "document")
                 turn.result.claims = [
                     {
@@ -210,7 +210,7 @@ def test_evidence_read_view_is_traced_without_new_evidence(store, settings):
         def complete(self, role, messages, tools, schema):
             if role == "research_director" and not Reads.calls:
                 Reads.calls += 1
-                context = json.loads(messages[1]["content"])
+                context = request_context(messages)
                 identity = next(e for e in context["evidence"] if e["evidence_type"] == "identity")
                 return ModelTurn(
                     calls=[
@@ -236,3 +236,26 @@ def test_evidence_read_view_is_traced_without_new_evidence(store, settings):
     assert traces[0]["view_of"] and traces[0]["view_of"] in {
         r.evidence_id for r in store.evidence(run_id)
     }
+
+
+def test_calls_within_a_stage_only_append_to_the_conversation(store, settings):
+    import copy
+
+    class Snapshots(FixtureModel):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def complete(self, role, messages, tools, schema):
+            self.calls.append((role, copy.deepcopy(messages)))
+            return super().complete(role, messages, tools, schema)
+
+    model = Snapshots()
+    ResearchEngine(settings, store, model=model).run(store.enqueue(ResearchRequest(ticker="TEST")))
+    repeated = 0
+    for (role, before), (next_role, after) in zip(model.calls, model.calls[1:]):
+        if role == next_role:
+            repeated += 1
+            # The previous request is an exact prefix, so the provider can reuse its cache.
+            assert after[: len(before)] == before
+    assert repeated

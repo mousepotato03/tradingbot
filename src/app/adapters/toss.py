@@ -164,7 +164,7 @@ class TossAdapter:
         self._lock = threading.RLock()
         self._account_lock = threading.Lock()
         self._account_cache = None
-        self._calendar_cache = None
+        self._calendar_cache = {}
 
     def _send(self, method, path, **kwargs):
         if not (
@@ -299,20 +299,24 @@ class TossAdapter:
             warnings=warnings,
         )
 
-    def _calendar(self):
-        """US session calendar shared by a batch of quotes and cached briefly per NY date."""
-        now = utcnow()
-        day = now.astimezone(NEW_YORK).date().isoformat()
-        cached = self._calendar_cache
-        if cached and cached[0] == day and time.monotonic() - cached[1] < 300:
-            return cached[2]
+    def _calendar(self, at=None):
+        """US session calendar around the NY date of `at` (default now), cached briefly."""
+        day = (at or utcnow()).astimezone(NEW_YORK).date().isoformat()
+        cached = self._calendar_cache.get(day)
+        if cached and time.monotonic() - cached[0] < 300:
+            return cached[1]
         calendar = self.get("/api/v1/market-calendar/US", {"date": day})
-        self._calendar_cache = (day, time.monotonic(), calendar)
+        self._calendar_cache = {
+            key: value
+            for key, value in self._calendar_cache.items()
+            if time.monotonic() - value[0] < 300
+        }
+        self._calendar_cache[day] = (time.monotonic(), calendar)
         return calendar
 
     def next_regular_open(self, after):
         """Start of the next US regular session strictly after `after` (trading days only)."""
-        calendar = self._calendar()
+        calendar = self._calendar(after)
         for day in ("today", "nextBusinessDay"):
             session = (calendar.get(day) or {}).get("regularMarket")
             if session:

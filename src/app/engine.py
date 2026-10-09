@@ -393,11 +393,14 @@ class ResearchEngine:
                     ]
             return gaps
 
-        def context(role, extra=None):
+        def shared_context():
+            """Run-wide context, identical for every stage until new evidence arrives.
+
+            It is sent before the stage block so the provider can reuse it from cache.
+            """
             at = request.as_of or utcnow()
             return json.dumps(
                 {
-                    "role": role,
                     "request": request.model_dump(mode="json"),
                     "fixture": self.settings.mode == "fixture",
                     "evidence_note": (
@@ -412,6 +415,16 @@ class ResearchEngine:
                         "from the latest daily close without being a data conflict."
                     ),
                     "evidence": [self._index_entry(r, at) for r in tools.records],
+                    "previous_report": self._previous_summary(previous) if previous else None,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+
+        def stage_context(role, extra=None):
+            return json.dumps(
+                {
+                    "role": role,
                     "completed_stages": {
                         key: self._stage_digest(value)
                         for key, value in checkpoint.items()
@@ -419,7 +432,6 @@ class ResearchEngine:
                     },
                     "open_gaps": advisory_gaps(),
                     "tool_budget_remaining": 0 if historical else max(0, limit - count),
-                    "previous_report": self._previous_summary(previous) if previous else None,
                     "trade_proposal": checkpoint.get("trade_proposal"),
                     "trade_proposal_validation": checkpoint.get("trade_proposal_validation"),
                     "instructions": extra,
@@ -448,16 +460,18 @@ class ResearchEngine:
 
         def ask(role, schema, extra=None):
             nonlocal model_calls, token_count
+            # Within a stage the conversation is only appended to, so each call can reuse the
+            # previous call from the provider's prompt cache; tool outputs carry new evidence.
             messages = [
                 {"role": "system", "content": policy_prompt()},
-                {"role": "user", "content": context(role, extra)},
+                {"role": "user", "content": shared_context()},
+                {"role": "user", "content": stage_context(role, extra)},
             ]
             invalid_claim_attempts = invalid_output_attempts = 0
             closing = False
             for _ in range(limit + 4):
                 if exhausted():
                     raise ToolError("RESEARCH_BUDGET_EXHAUSTED")
-                messages[1]["content"] = context(role, extra)
                 if not historical and not tools_left() and not closing:
                     closing = True
                     messages.append(

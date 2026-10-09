@@ -45,12 +45,15 @@ class Settings(BaseSettings):
     observation_retention_days: int = Field(default=14, ge=1)
     # USD holdings found in the account are watched and researched automatically.
     holdings_auto_watch: bool = True
-    # Each watch is re-researched daily; quick keeps model and search usage low.
+    # Mode for watched holdings research; quick keeps model and search usage low.
     holding_research_mode: Literal["quick", "normal", "deep", "critical"] = "quick"
     # Routine re-research: "market_open" runs on trading days at the regular open plus an offset
     # (fresh regular-session quotes are needed to validate levels); "interval" every N hours.
     research_schedule: Literal["market_open", "interval"] = "market_open"
     market_open_offset_minutes: int = 10
+    # market_open schedule: routine re-research every N trading days; events still trigger
+    # research immediately in between.
+    routine_research_trading_days: int = Field(default=3, ge=1)
     research_interval_hours: int = Field(default=24, ge=1)
     max_output_tokens: int = 16000
     worker_lease_seconds: int = 7200

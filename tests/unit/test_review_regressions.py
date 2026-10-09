@@ -8,7 +8,7 @@ from app.adapters.fixture import FixtureAdapters
 from app.adapters.http import ToolError
 from app.engine import ResearchEngine
 from app.evidence import validate_claims
-from app.llm import FixtureModel
+from app.llm import FixtureModel, request_context
 from app.models import Claim, PortfolioDecision, ResearchRequest, utcnow
 from app.tools import ToolRegistry, add_technical_record
 from app.validation import validate_decision
@@ -172,7 +172,7 @@ class RecordingModel(FixtureModel):
         self.contexts = []
 
     def complete(self, role, messages, tools, schema):
-        context = json.loads(messages[1]["content"])
+        context = request_context(messages)
         self.contexts.append((role, context))
         return super().complete(role, messages, tools, schema)
 
@@ -214,7 +214,7 @@ class PlannedModel(RecordingModel):
         turn = super().complete(role, messages, tools, schema)
         if not isinstance(turn.result, PortfolioDecision):
             return turn
-        context = json.loads(messages[1]["content"])
+        context = request_context(messages)
         quote = next(r for r in context["evidence"] if r["evidence_type"] == "quote")
         technical = next(r for r in context["evidence"] if r["evidence_type"] == "technical")
         facts = {f["name"]: Decimal(f["value"]) for f in technical["facts"]}

@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from app.adapters.fixture import FixtureAdapters
 from app.config import Settings
 from app.engine import ResearchEngine
-from app.llm import FixtureModel, ModelTurn, OpenAIModel
+from app.llm import FixtureModel, ModelTurn, OpenAIModel, request_context
 from app.models import Claim, PortfolioDecision, ResearchRequest, ResearchSummary, TradePlan, utcnow
 from app.monitoring import Monitor
 from app.notifications import DiscordNotifier
@@ -18,7 +18,7 @@ class Planner(FixtureModel):
     def complete(self, role, messages, tools, schema):
         turn = super().complete(role, messages, tools, schema)
         if schema is PortfolioDecision:
-            context = json.loads(messages[1]["content"])
+            context = request_context(messages)
             technical = next(r for r in context["evidence"] if r["evidence_type"] == "technical")
 
             def level(name):
@@ -241,6 +241,7 @@ def test_openai_adapter_uses_strict_contract_and_preserves_usage(settings):
     assert turn.usage["total_tokens"] == 30
     arguments = client.responses.create.call_args.kwargs
     assert arguments["store"] is False and arguments["text"]["format"]["strict"]
+    assert arguments["prompt_cache_key"]
     # Provider default reasoning unless configured per role.
     assert "reasoning" not in arguments
     tuned = settings.model_copy(
@@ -278,3 +279,23 @@ def test_openai_adapter_reports_incomplete_reason_and_invalid_output(settings):
     except InvalidModelOutput as error:
         assert error.code == "MODEL_OUTPUT_INVALID" and error.usage["input_tokens"] == 5
         json.dumps(error.errors)  # safe to hand back to the model
+
+
+def test_openai_adapter_marks_the_stable_prefix_for_caching(settings):
+    client = Mock()
+    response = Mock(status="completed", output=[], output_text=json.dumps({"sections": []}))
+    client.responses.create.return_value = response
+    messages = [
+        {"role": "system", "content": "policy"},
+        {"role": "user", "content": "{}"},
+        {"role": "user", "content": "{}"},
+    ]
+    try:
+        OpenAIModel(settings, client).complete("bull", messages, [], ResearchSummary)
+    except Exception:
+        pass
+    sent = client.responses.create.call_args.kwargs["input"]
+    for message in sent[:2]:
+        assert message["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert sent[2] == messages[2]
+    assert messages[0]["content"] == "policy"  # the engine's list is not modified

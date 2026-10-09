@@ -128,6 +128,42 @@ class InvalidModelOutput(ToolError):
         self.errors, self.usage = errors, usage
 
 
+def request_context(messages: list[dict]) -> dict:
+    """The JSON context a request carries: the shared block and the stage block."""
+    context = {}
+    for message in messages[1:3]:
+        if message.get("role") == "user" and isinstance(message.get("content"), str):
+            try:
+                context.update(json.loads(message["content"]))
+            except ValueError:
+                break
+    return context
+
+
+# The system prompt and the run-wide context block end at explicit cache breakpoints; the
+# stage block and conversation after them are covered by the provider's implicit breakpoint.
+CACHED_PREFIX_MESSAGES = 2
+PROMPT_CACHE_KEY = "tradingbot-research"
+
+
+def with_cache_breakpoints(messages: list[dict]) -> list[dict]:
+    marked = []
+    for index, message in enumerate(messages):
+        if index < CACHED_PREFIX_MESSAGES and isinstance(message.get("content"), str):
+            message = {
+                **message,
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": message["content"],
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    }
+                ],
+            }
+        marked.append(message)
+    return marked
+
+
 @dataclass
 class ModelTurn:
     result: BaseModel | None = None
@@ -168,9 +204,10 @@ class OpenAIModel:
         try:
             response = self.client.responses.create(
                 model=model,
-                input=messages,
+                input=with_cache_breakpoints(messages),
                 tools=tools,
                 store=False,
+                prompt_cache_key=PROMPT_CACHE_KEY,
                 max_output_tokens=self.settings.max_output_tokens,
                 include=["reasoning.encrypted_content"],
                 text={
@@ -220,8 +257,15 @@ class FixtureModel:
         self.scenario = scenario
 
     def complete(self, role, messages, tools, schema):
-        context = json.loads(messages[1]["content"])
-        records = context["evidence"]
+        context = request_context(messages)
+        # Evidence fetched during this stage arrives in tool outputs, as for a live model.
+        records = context["evidence"] + [
+            output
+            for output in (
+                json.loads(m["output"]) for m in messages if m.get("type") == "function_call_output"
+            )
+            if isinstance(output, dict) and "evidence_type" in output
+        ]
         ids = [r["evidence_id"] for r in records if r["usable_as_fact"]]
         if schema is TriageDecision:
             return ModelTurn(

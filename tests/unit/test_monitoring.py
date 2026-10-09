@@ -1,4 +1,3 @@
-import json
 from datetime import timedelta
 
 import pytest
@@ -7,7 +6,7 @@ from sqlalchemy import select
 from app.adapters.fixture import FixtureAdapters
 from app.adapters.http import ToolError
 from app.engine import ResearchEngine
-from app.llm import FixtureModel
+from app.llm import FixtureModel, request_context
 from app.models import PortfolioDecision, ResearchRequest, TradePlan, utcnow
 from app.monitoring import Monitor
 from app.storage import OutboxRow, RunRow, StateRow, WatchRow
@@ -17,7 +16,7 @@ class Planner(FixtureModel):
     def complete(self, role, messages, tools, schema):
         turn = super().complete(role, messages, tools, schema)
         if schema is PortfolioDecision:
-            context = json.loads(messages[1]["content"])
+            context = request_context(messages)
             technical = next(r for r in context["evidence"] if r["evidence_type"] == "technical")
 
             def level(name):

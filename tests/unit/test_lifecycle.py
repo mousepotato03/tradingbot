@@ -1,4 +1,3 @@
-import json
 from decimal import Decimal
 
 import pytest
@@ -7,7 +6,7 @@ from app.adapters.fixture import FixtureAdapters
 from app.discovery import Discovery
 from app.engine import ResearchEngine
 from app.lifecycle import transition
-from app.llm import FixtureModel, ModelTurn
+from app.llm import FixtureModel, ModelTurn, request_context
 from app.models import CandidateState as State
 from app.models import ResearchRequest, TriageDecision
 from app.storage import StateRow
@@ -134,7 +133,7 @@ def test_triage_skip_is_remembered_and_not_rescreened(store, settings):
     class Skip(FixtureModel):
         def complete(self, role, messages, tools, schema):
             if schema is TriageDecision:
-                evidence = json.loads(messages[1]["content"])["evidence"][0]["evidence_id"]
+                evidence = request_context(messages)["evidence"][0]["evidence_id"]
                 return ModelTurn(
                     result=TriageDecision(
                         priority="skip", reasons=["조사 우선순위 낮음"], evidence_ids=[evidence]

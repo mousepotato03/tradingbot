@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -8,7 +7,7 @@ from sqlalchemy import select
 from app.adapters.fixture import FixtureAdapters
 from app.engine import ResearchEngine
 from app.lifecycle import candidate_state, guard_of
-from app.llm import FixtureModel
+from app.llm import FixtureModel, request_context
 from app.models import CandidateState as State
 from app.models import (
     EvidenceRecord,
@@ -68,7 +67,7 @@ class Guarding(FixtureModel):
         if schema is PortfolioDecision:
             technical = next(
                 r
-                for r in json.loads(messages[1]["content"])["evidence"]
+                for r in request_context(messages)["evidence"]
                 if r["evidence_type"] == "technical"
             )
             low = next(f for f in technical["facts"] if f["name"] == "recent_low")
@@ -294,15 +293,28 @@ def ny(*args):
 
 
 @pytest.mark.parametrize(
-    "now,expected",
+    "days,now,expected",
     [
-        (ny(2026, 10, 3, 12, 0), ny(2026, 10, 5, 9, 40)),  # Saturday -> Monday
-        (ny(2026, 10, 1, 8, 0), ny(2026, 10, 1, 9, 40)),  # before the open
-        (ny(2026, 10, 1, 9, 45), ny(2026, 10, 2, 9, 40)),  # after today's slot
+        (1, ny(2026, 10, 3, 12, 0), ny(2026, 10, 5, 9, 40)),  # Saturday -> Monday
+        (1, ny(2026, 10, 1, 8, 0), ny(2026, 10, 1, 9, 40)),  # before the open
+        (1, ny(2026, 10, 1, 9, 45), ny(2026, 10, 2, 9, 40)),  # after today's slot
+        (3, ny(2026, 10, 3, 12, 0), ny(2026, 10, 7, 9, 40)),  # Mon, Tue, Wed
+        (3, ny(2026, 10, 1, 8, 0), ny(2026, 10, 5, 9, 40)),  # Thu, Fri, Mon
+        (3, ny(2026, 10, 1, 9, 45), ny(2026, 10, 6, 9, 40)),  # Fri, Mon, Tue
     ],
 )
-def test_routine_research_runs_after_the_open_on_trading_days(settings, now, expected):
-    assert next_research_at(settings, FixtureAdapters(), now) == expected
+def test_routine_research_runs_every_n_trading_days_after_the_open(settings, days, now, expected):
+    routine = settings.model_copy(update={"routine_research_trading_days": days})
+    assert next_research_at(routine, FixtureAdapters(), now) == expected
+
+
+def test_routine_research_falls_back_to_the_interval_without_a_calendar(settings):
+    class NoCalendar(FixtureAdapters):
+        def next_regular_open(self, after):
+            raise RuntimeError("calendar down")
+
+    now = ny(2026, 10, 1, 8, 0)
+    assert next_research_at(settings, NoCalendar(), now) == now + timedelta(hours=24)
 
 
 def test_interval_schedule_and_first_research(settings):

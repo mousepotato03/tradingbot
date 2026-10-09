@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.adapters.http import ToolError
-from app.adapters.toss import RateLimiter, TossAdapter
+from app.adapters.toss import NEW_YORK, RateLimiter, TossAdapter
 from app.evidence import evidence_is_fresh
 from app.models import utcnow
 
@@ -320,6 +320,10 @@ def test_next_regular_open_skips_to_the_next_business_day(settings):
     assert toss.next_regular_open(now - timedelta(hours=3)) == datetime.fromisoformat(
         today["startTime"]
     )
+    # Later sessions are found from the calendar of the date being asked about.
+    later = now + timedelta(days=3)
+    toss.next_regular_open(later)
+    assert toss.transport.calls[-1][2] == {"date": later.astimezone(NEW_YORK).date().isoformat()}
 
 
 def closed_calendar(now, **today):
