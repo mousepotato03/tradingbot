@@ -6,10 +6,10 @@ from sqlalchemy import func, select
 from app.adapters.fixture import FixtureAdapters
 from app.adapters.http import ToolError
 from app.engine import TOKEN_BUDGETS, ResearchEngine
-from app.llm import FixtureModel
-from app.models import ResearchRequest, utcnow
+from app.llm import FixtureModel, InvalidModelOutput
+from app.models import ResearchRequest, StageReview, utcnow
 from app.reporting import markdown
-from app.storage import JobRow, OutboxRow, ReportRow
+from app.storage import JobRow, OutboxRow, ReportRow, RunRow
 
 
 def run(store, settings, scenario="balanced"):
@@ -154,3 +154,44 @@ def test_baseline_includes_market_cap_account_facts_and_52_week_range(store, set
     ]
     assert {f.name for f in records["portfolio"].facts} == {"buying_power"}
     assert {"low_52w", "high_52w"} <= {f.name for f in records["technical"].facts}
+
+
+class RejectsBull(FixtureModel):
+    """Returns contract-breaking output for the bull stage `failures` times."""
+
+    def __init__(self, failures):
+        super().__init__()
+        self.failures = failures
+
+    def complete(self, role, messages, tools, schema):
+        if role == "bull" and self.failures:
+            self.failures -= 1
+            if self.failures % 2:
+                raise InvalidModelOutput(
+                    [{"loc": ["claims", 0], "msg": "numbers need references", "type": "x"}],
+                    {"input_tokens": 100, "output_tokens": 10},
+                )
+            StageReview.model_validate_json("{}")
+        return super().complete(role, messages, tools, schema)
+
+
+def test_invalid_model_output_is_corrected_once(store, settings):
+    run_id = store.enqueue(ResearchRequest(ticker="TEST"))
+    report = ResearchEngine(settings, store, model=RejectsBull(1)).run(run_id)
+    assert report.validation.valid
+    traces = store.traces(run_id)
+    rejection = next(t for t in traces if t["kind"] == "output_rejection")
+    assert rejection["role"] == "bull" and rejection["errors"][0]["msg"]
+    # The rejected call still counts toward the model-call and token budgets.
+    assert {"kind": "model", "role": "bull", "usage": {}} == {
+        k: v for k, v in traces[traces.index(rejection) - 1].items() if k != "at"
+    }
+
+
+def test_repeated_invalid_model_output_fails_with_a_clear_code(store, settings):
+    run_id = store.enqueue(ResearchRequest(ticker="TEST"))
+    with pytest.raises(ToolError, match="MODEL_OUTPUT_INVALID"):
+        ResearchEngine(settings, store, model=RejectsBull(2)).run(run_id)
+    with store.transaction() as session:
+        row = session.get(RunRow, run_id)
+        assert (row.status, row.error) == ("FAILED", "MODEL_OUTPUT_INVALID")

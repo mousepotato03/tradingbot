@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.adapters.http import ToolError
 from app.config import Settings
@@ -112,6 +112,22 @@ class FunctionCall:
     arguments: dict
 
 
+def output_errors(error: ValidationError) -> list[dict]:
+    """JSON-safe validation errors the model can act on."""
+    return error.errors(include_url=False, include_input=False, include_context=False)
+
+
+class InvalidModelOutput(ToolError):
+    """Schema-valid JSON that breaks a contract rule (e.g. numbers without references).
+
+    Carries the call's usage so research budgets still count it.
+    """
+
+    def __init__(self, errors: list[dict], usage: dict):
+        super().__init__("MODEL_OUTPUT_INVALID")
+        self.errors, self.usage = errors, usage
+
+
 @dataclass
 class ModelTurn:
     result: BaseModel | None = None
@@ -171,7 +187,10 @@ class OpenAIModel:
             # SDK request/error objects may contain API keys or account data.
             raise ToolError("MODEL_" + type(error).__name__) from None
         if response.status != "completed":
-            raise ToolError("MODEL_INCOMPLETE")
+            details = getattr(response, "incomplete_details", None)
+            raise ToolError(
+                f"MODEL_INCOMPLETE:{getattr(details, 'reason', None) or response.status}"
+            )
         calls = [
             FunctionCall(item.call_id, item.name, json.loads(item.arguments))
             for item in response.output
@@ -187,7 +206,11 @@ class OpenAIModel:
             )
         if not response.output_text:
             raise ToolError("MODEL_REFUSAL_OR_EMPTY")
-        return ModelTurn(result=schema.model_validate_json(response.output_text), usage=usage)
+        try:
+            result = schema.model_validate_json(response.output_text)
+        except ValidationError as error:
+            raise InvalidModelOutput(output_errors(error), usage) from None
+        return ModelTurn(result=result, usage=usage)
 
 
 class FixtureModel:

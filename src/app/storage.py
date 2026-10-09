@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import (
@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
     create_engine,
     delete,
     func,
@@ -23,6 +24,22 @@ from app.evidence import persistent_record
 from app.models import EvidenceRecord, ResearchReport, ResearchRequest, new_id, utcnow
 
 
+class UTCDateTime(TypeDecorator):
+    """Aware datetimes are stored as UTC.
+
+    SQLite drops the offset instead of converting it, so a Toss calendar time such as
+    22:40+09:00 would otherwise be read back as 22:40 UTC. Reads stay naive UTC.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is not None and value.tzinfo is not None:
+            return value.astimezone(UTC)
+        return value
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -34,7 +51,7 @@ class RunRow(Base):
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
     request: Mapped[dict] = mapped_column(JSON)
     checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -56,7 +73,7 @@ class ReportRow(Base):
     __tablename__ = "reports"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     ticker: Mapped[str] = mapped_column(String(20), index=True)
-    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
     body: Mapped[dict] = mapped_column(JSON)
     markdown: Mapped[str] = mapped_column(Text)
 
@@ -75,8 +92,8 @@ class OutboxRow(Base):
     body: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
-    retry_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
-    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
+    retry_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
+    created_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class JobRow(Base):
@@ -84,8 +101,8 @@ class JobRow(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(36), unique=True)
     status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
-    available_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
-    lease_until: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
+    lease_until: Mapped[object | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class OutcomeRow(Base):
@@ -105,7 +122,7 @@ class ObservationRow(Base):
     ticker: Mapped[str] = mapped_column(String(20), index=True)
     kind: Mapped[str] = mapped_column(String(30))
     report_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    observed_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
+    observed_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
     body: Mapped[dict] = mapped_column(JSON)
 
 
@@ -116,14 +133,14 @@ class SearchUsageRow(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     provider: Mapped[str] = mapped_column(String(20))
     run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    used_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    used_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
 
 class WatchRow(Base):
     __tablename__ = "watch_schedules"
     ticker: Mapped[str] = mapped_column(String(20), primary_key=True)
-    next_research_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
-    next_condition_at: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
+    next_research_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
+    next_condition_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
     body: Mapped[dict] = mapped_column(JSON, default=dict)
 
 

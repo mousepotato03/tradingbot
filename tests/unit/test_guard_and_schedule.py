@@ -313,3 +313,17 @@ def test_interval_schedule_and_first_research(settings):
     assert first_research_at(settings, FixtureAdapters(), now) == ny(2026, 10, 5, 9, 40)
     in_session = ny(2026, 10, 1, 11, 0)
     assert first_research_at(settings, FixtureAdapters(), in_session) == in_session
+
+
+def test_calendar_times_with_an_offset_are_stored_as_utc(store):
+    seoul = ZoneInfo("Asia/Seoul")
+    with store.transaction() as session:
+        session.add(
+            WatchRow(
+                ticker="TZ", next_research_at=datetime(2026, 10, 9, 22, 40, tzinfo=seoul), body={}
+            )
+        )
+    with store.transaction() as session:
+        stored = session.get(WatchRow, "TZ").next_research_at
+    # 22:40 KST is 13:40 UTC; the monitor reads stored times as naive UTC.
+    assert stored.replace(tzinfo=None) == datetime(2026, 10, 9, 13, 40)

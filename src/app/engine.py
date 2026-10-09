@@ -26,7 +26,14 @@ from app.lifecycle import (
     own_guard,
     report_alert,
 )
-from app.llm import FixtureModel, ModelPort, OpenAIModel, policy_prompt
+from app.llm import (
+    FixtureModel,
+    InvalidModelOutput,
+    ModelPort,
+    OpenAIModel,
+    output_errors,
+    policy_prompt,
+)
 from app.models import (
     CandidateState,
     EvidenceRecord,
@@ -445,7 +452,7 @@ class ResearchEngine:
                 {"role": "system", "content": policy_prompt()},
                 {"role": "user", "content": context(role, extra)},
             ]
-            invalid_claim_attempts = 0
+            invalid_claim_attempts = invalid_output_attempts = 0
             closing = False
             for _ in range(limit + 4):
                 if exhausted():
@@ -464,7 +471,41 @@ class ResearchEngine:
                 self._prune(messages)
                 model_calls += 1
                 offered = tools.contracts() if not historical and tools_left() else []
-                result = self.model.complete(role, messages, offered, schema)
+                try:
+                    result = self.model.complete(role, messages, offered, schema)
+                except (InvalidModelOutput, ValidationError) as error:
+                    # Strict JSON schemas cannot express every contract rule; give the model
+                    # one correction, as for unsupported claims, before failing the run.
+                    invalid = isinstance(error, InvalidModelOutput)
+                    usage = error.usage if invalid else {}
+                    errors = error.errors if invalid else output_errors(error)
+                    token_count += billable_tokens(usage)
+                    at = utcnow().isoformat()
+                    self.store.trace(
+                        run_id, {"kind": "model", "role": role, "usage": usage, "at": at}
+                    )
+                    self.store.trace(
+                        run_id, {"kind": "output_rejection", "role": role, "errors": errors}
+                    )
+                    invalid_output_attempts += 1
+                    if invalid_output_attempts > 1:
+                        raise ToolError("MODEL_OUTPUT_INVALID") from None
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                {
+                                    "output_errors": errors,
+                                    "instruction": "Your answer was rejected by these "
+                                    "contract checks. Return the complete answer again so "
+                                    "that it satisfies them.",
+                                },
+                                ensure_ascii=False,
+                                default=str,
+                            ),
+                        }
+                    )
+                    continue
                 token_count += billable_tokens(result.usage)
                 self.store.trace(
                     run_id,

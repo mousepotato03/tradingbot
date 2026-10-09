@@ -253,3 +253,28 @@ def test_openai_adapter_uses_strict_contract_and_preserves_usage(settings):
     assert client.responses.create.call_args.kwargs["model"] == tuned.pm_model
     OpenAIModel(tuned, client).complete("bull", [], [], ResearchSummary)
     assert client.responses.create.call_args.kwargs["reasoning"] == {"effort": "low"}
+
+
+def test_openai_adapter_reports_incomplete_reason_and_invalid_output(settings):
+    from app.adapters.http import ToolError
+    from app.llm import InvalidModelOutput
+
+    client = Mock()
+    client.responses.create.return_value = Mock(
+        status="incomplete", incomplete_details=Mock(reason="max_output_tokens")
+    )
+    model = OpenAIModel(settings, client)
+    try:
+        model.complete("bull", [], [], ResearchSummary)
+        raise AssertionError("incomplete response accepted")
+    except ToolError as error:
+        assert error.code == "MODEL_INCOMPLETE:max_output_tokens"
+    response = Mock(status="completed", output=[], output_text=json.dumps({"sections": 1}))
+    response.usage.model_dump.return_value = {"input_tokens": 5, "output_tokens": 1}
+    client.responses.create.return_value = response
+    try:
+        model.complete("bull", [], [], ResearchSummary)
+        raise AssertionError("invalid output accepted")
+    except InvalidModelOutput as error:
+        assert error.code == "MODEL_OUTPUT_INVALID" and error.usage["input_tokens"] == 5
+        json.dumps(error.errors)  # safe to hand back to the model
