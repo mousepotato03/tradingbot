@@ -9,11 +9,11 @@ The initial implementation now covers the executable research path described bel
 | 0–1 | Docs, Pydantic contracts, evidence ledger, provenance/numeric checks | Offline schema/evidence tests |
 | 2 | Read-only Toss, SEC submissions/company facts, fees/account | Mocked external HTTP contracts |
 | 3 | Technical indicators, ratio arithmetic, RR, sizing/cost/concentration validation | Known numerical values and invalid-input tests |
-| 4 | Brave (Tavily default since v0.2), HTML/PDF reader, Chromium element/coordinate/tabs/download tools, egress restrictions | HTTP fixtures and actual local Chromium |
+| 4 | Brave (Tavily default since v0.2), HTML/PDF reader, private-network URL rejection | HTTP fixtures |
 | 5–7 | Tool loop, budgets/checkpoints, analyst sections, debate/rebuttals, risk committee, premortem, PM | Scripted-model full-flow tests, Responses contract mock |
 | 8–10 | Plan rejection/retry, candidate memory, scheduled watch, change-based Discord outbox | Risk, holdings/state, condition-hit and duplicate-alert tests |
 | 11 | Session-aligned forward returns, benchmark-relative returns, MFE/MAE, audit events | Formula tests; actual-fill realized R remains absent |
-| 12 | Locked dependencies, Docker/Compose, PostgreSQL migration, health/restart/log rotation, backup guide | Fresh SQLite migration tested; PostgreSQL and image builds configured in CI |
+| 12 | Locked dependencies, SQLite + Alembic, worker heartbeat, GitHub Actions deploy via `update.sh`, backup guide | Fresh SQLite migration tested; CI gates deploy |
 
 The implementation is testable without live credentials. Live provider behavior, Oracle resource/sandbox configuration, webhook delivery and production restart recovery require deployment acceptance. They must not be reported as verified by offline tests. Aggregate false-alert precision and entry-hit evaluation need independently labeled outcomes; stored events are inputs for that work. Automatic orders remain outside v1.
 
@@ -34,7 +34,6 @@ A code review of v0.1 found decision, audit, safety and scale defects. They are 
 | P0 | Evidence index context, bounded tool previews, condensed history, read-only `evidence_read` | Context-size and prune tests |
 | P0 | `monitor_observations`; completed evidence immutable | Monitor and storage tests |
 | P0 | Watch stores the base request; follow-ups inherit it with a `trigger` | Inheritance test |
-| P0 | Browser GET/HEAD only, POST allowlist, WebSockets blocked | Actual Chromium POST/WebSocket test |
 | P1 | Batched quotes, shared account snapshot, per-group Toss rate limiter | Fake-clock limiter and batching tests |
 | P1 | Screen → triage → deep discovery; trend ranks, never gates | Discovery tests |
 | P1 | IFRS company facts; plain ETF path from N-PORT | Adapter tests on SEC-shaped fixtures |
@@ -145,14 +144,6 @@ Implement:
 - PDF reader
 - source metadata extraction
 - evidence record conversion
-
-Then add:
-
-- isolated browser worker
-- Chromium
-- Playwright
-- screenshots/download sandbox
-- browser audit log
 
 The research model should not receive unrestricted shell access.
 
@@ -296,23 +287,13 @@ The evaluation target is decision quality, not trade frequency.
 
 Build:
 
-- Dockerfiles
-- docker-compose
 - env templates
-- persistent volumes
 - migrations
-- health checks
-- log rotation
-- service restart policy
+- worker heartbeat
+- GitHub Actions deploy (`update.sh` on the VM)
 - backup procedure
 
-Recommended services:
-
-- research-api
-- scheduler
-- browser-worker
-- postgres
-- discord notifier if separated
+Docker/Compose, PostgreSQL, the HTTP API and the browser worker were built in v0.1 and removed because the VM runs a single virtualenv worker on SQLite.
 
 ## v1 definition of done
 
@@ -322,7 +303,7 @@ A user or scheduler can request research on a U.S. equity and the system can:
 2. fetch current quote and OHLCV
 3. retrieve official financial evidence
 4. autonomously search/open additional web evidence
-5. use browser fallback if necessary
+5. report unreadable sources as unavailable instead of guessing
 6. construct evidence-backed bull/bear cases
 7. output exactly one portfolio rating
 8. distinguish new-entry and holder actions

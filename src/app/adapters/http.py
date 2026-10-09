@@ -37,12 +37,11 @@ def public_url(url: str, resolver=socket.getaddrinfo) -> str:
 
 
 class Transport:
-    def __init__(self, client: httpx.Client | None = None, proxy: str = ""):
+    def __init__(self, client: httpx.Client | None = None):
         self.client = client or httpx.Client(
             timeout=httpx.Timeout(30, connect=10),
             follow_redirects=False,
             trust_env=False,
-            proxy=proxy or None,
         )
 
     def request(self, method, url, **kwargs):
@@ -73,7 +72,6 @@ class Transport:
 
     def public_get(self, url, *, max_bytes=10_000_000, headers_for=None):
         """GET a public URL. `headers_for(url)` supplies per-host headers on every redirect hop."""
-        # Production egress proxy additionally enforces destination IPs after DNS resolution.
         for _ in range(6):
             public_url(url)
             try:

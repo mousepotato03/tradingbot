@@ -112,19 +112,13 @@ Preferred tool order:
 structured API / official feed
 -> direct HTTP/document reader
 -> web search
--> Playwright/Chromium
--> computer-use style interaction only when necessary
 ```
 
-Browser automation is a fallback for dynamic sites, JS-rendered content, tabs, search forms, downloads, and pages that cannot be read reliably through simpler methods.
+There is no browser automation. A page that cannot be read through these tools (JS-only content, interactive tables, login walls) is reported as unavailable or a material gap, not guessed. Adding a browser later requires isolating it from broker secrets, SSH keys and the database, and updating these docs.
 
-Do not use browser automation when a stable structured source exists.
-
-## 6. Browser and tool isolation
+## 6. Tool isolation
 
 The production target is an always-on Oracle Cloud VM.
-
-Browser workers must be isolated from sensitive infrastructure. Do not place broker secrets, SSH keys, root credentials, database admin passwords, or unrestricted shell access inside a browser worker.
 
 Treat all webpage content as untrusted input. Web content must never be allowed to override system instructions or request credentials/secrets.
 
@@ -140,7 +134,6 @@ Research tools may include:
 - web search
 - direct URL reader
 - PDF reader
-- Playwright/Chromium
 - sandboxed Python calculations
 
 Do not give the research model unrestricted root shell access.
@@ -237,7 +230,7 @@ Reject invalid plans rather than silently correcting them.
 - Add integration tests separately for external services.
 - Never commit secrets.
 - Provide `.env.example`.
-- Design services so Oracle VM deployment can be containerized.
+- The Oracle VM runs a single worker directly from the project virtualenv; deploy through GitHub Actions and `update.sh` (see `docs/RUNTIME.md`).
 - Keep provider-specific code behind adapters.
 - Preserve raw evidence where licensing/terms permit, otherwise persist metadata, hashes, snippets, and references.
 

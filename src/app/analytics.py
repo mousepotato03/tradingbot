@@ -76,12 +76,6 @@ def atr(highs, lows, closes, period=14) -> float:
     return float(result)
 
 
-def safe_ratio(numerator: Decimal, denominator: Decimal) -> Decimal:
-    if not numerator.is_finite() or not denominator.is_finite() or denominator == 0:
-        raise ValueError("Ratio requires finite values and nonzero denominator")
-    return numerator / denominator
-
-
 def reward_risk(entry: Decimal, stop: Decimal, target: Decimal) -> Decimal:
     if not all(v.is_finite() for v in (entry, stop, target)) or not 0 < stop < entry < target:
         raise ValueError("Long plan requires 0 < stop < entry < target")

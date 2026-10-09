@@ -359,7 +359,7 @@ def _flatten_tables(node):
 class DocumentReader:
     def __init__(self, settings: Settings, transport=None):
         self.settings = settings
-        self.transport = transport or Transport(proxy=settings.egress_proxy)
+        self.transport = transport or Transport()
 
     def _headers(self, url):
         host = urlsplit(url).hostname or ""

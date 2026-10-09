@@ -27,10 +27,9 @@ uv run tradingbot worker
 |---|---|
 | `TRADINGBOT_MODE=live` | 실제 공급자 사용 |
 | `TRADINGBOT_OPENAI_API_KEY` | 모델 호출 |
-| `TRADINGBOT_RESEARCH_MODEL`, `TRADINGBOT_PM_MODEL` | Responses API tool calling·strict structured output·이미지 입력을 지원하는 모델명 |
+| `TRADINGBOT_RESEARCH_MODEL`, `TRADINGBOT_PM_MODEL` | Responses API tool calling·strict structured output을 지원하는 모델명 |
 | `TRADINGBOT_TRIAGE_MODEL` | 선택 사항. 발굴 triage용 저비용 모델. 비우면 research 모델 사용 |
 | `TRADINGBOT_RESEARCH_REASONING_EFFORT`, `TRADINGBOT_PM_REASONING_EFFORT`, `TRADINGBOT_TRIAGE_REASONING_EFFORT` | 선택 사항. 역할별 `reasoning.effort`. 비우면 provider 기본값. 지원 값은 모델마다 다름 |
-| `TRADINGBOT_BROWSER_POST_ALLOWED_HOSTS` | 선택 사항. POST 검색 폼이 꼭 필요한 정확한 hostname 목록(쉼표 구분). 기본은 비어 있어 browser가 읽기 전용 |
 | `TRADINGBOT_TOSS_CLIENT_ID`, `TRADINGBOT_TOSS_CLIENT_SECRET` | Toss 공식 Open API 읽기 |
 | `TRADINGBOT_TOSS_ACCOUNT_SEQ` | 필요한 경우 계좌 지정 |
 | `TRADINGBOT_SEARCH_PROVIDER` | `tavily`(기본) 또는 `brave` |
@@ -41,50 +40,32 @@ uv run tradingbot worker
 | `TRADINGBOT_RESEARCH_INTERVAL_HOURS` | `interval` 방식의 재조사 간격(기본 24시간). 감시 종목 수와 함께 모델 비용을 좌우 |
 | `TRADINGBOT_HOLDINGS_AUTO_WATCH`, `TRADINGBOT_HOLDING_RESEARCH_MODE` | 계좌의 USD 보유 종목 자동 감시 여부와 그 조사 모드. 기본 `true`, `quick` |
 | `TRADINGBOT_SEC_USER_AGENT` | 서비스명과 실제 연락처를 포함한 SEC User-Agent |
-| `TRADINGBOT_BROWSER_TOKEN` | 내부 browser worker 인증용 별도 난수 |
-| `TRADINGBOT_POSTGRES_PASSWORD` | 운영 DB 암호 |
 | `TRADINGBOT_DISCORD_WEBHOOK` | 선택 사항. 비워 두면 전송하지 않음 |
 
 `doctor`는 필수 설정의 존재만 검사하며 실제 API 연결이나 권한을 확인하지 않는다. 모델명과 가격을 코드에 고정하지 않으며 실제 token usage를 run trace에 보관한다. 달러 비용을 임의로 추정하지 않는다.
 
-Toss는 동일 client의 새 토큰 발급이 이전 토큰을 무효화하므로, 운영은 **research worker 한 개**가 인증과 account/quote 조회를 소유한다. 같은 credentials로 기존 봇이나 별도 CLI live 프로세스를 동시에 실행하지 않는다. 실행 중 토큰이 다른 곳에서 무효화되어 `HTTP_401`이 나면 한 번 재발급해 재시도하지만, 두 프로세스가 번갈아 토큰을 받으면 계속 끊긴다. API 프로세스는 작업을 큐에 넣으며 Toss·모델 키를 받지 않는다.
+Toss는 동일 client의 새 토큰 발급이 이전 토큰을 무효화하므로, 운영은 **research worker 한 개**가 인증과 account/quote 조회를 소유한다. 같은 credentials로 기존 봇이나 별도 CLI live 프로세스를 동시에 실행하지 않는다. 실행 중 토큰이 다른 곳에서 무효화되어 `HTTP_401`이 나면 한 번 재발급해 재시도하지만, 두 프로세스가 번갈아 토큰을 받으면 계속 끊긴다.
 
-## 4. Oracle Compose 배포
+## 4. Oracle VM 배포
 
-Docker Engine과 Compose가 동작하는 Oracle Linux VM에서 실행한다.
+Oracle Linux VM에서 컨테이너 없이 `~/tradingbot`의 `.venv`로 worker 하나를 직접 실행한다. DB는 `TRADINGBOT_DATABASE_URL=sqlite:///.research/live.db`(SQLite)이고 로그는 `.research/worker.log`다.
 
-```sh
-docker compose config --quiet
-docker compose up -d --build
-docker compose ps
-curl http://127.0.0.1:8000/health
-docker compose logs --tail 100 research-worker browser-worker
-```
+**자동 배포:** `main`에 push하면 GitHub Actions의 `checks`(ruff·pytest·wheel build)가 돌고, 성공하면 `deploy` 워크플로가 SSH로 VM에 들어가 `./update.sh`를 실행한다. `gh workflow run deploy`로 수동 실행할 수도 있다. 배포용 SSH 키는 VM의 `authorized_keys`에서 `restrict,command="cd /home/opc/tradingbot && ./update.sh"`로 제한되어 다른 명령을 실행할 수 없다. 키·호스트·사용자·host key는 저장소 secrets(`DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`)에만 둔다.
 
-VM에서는 `./update.sh`가 `git pull --ff-only`, `uv sync --frozen`, `alembic upgrade head`, 기존 워커 종료, `nohup`으로 워커 재시작, 로그 확인을 한 번에 실행한다 (도커 없이 직접 실행하는 VM용, 로그는 `.research/worker.log`). `--logs N` 옵션이 있고, VM 작업 트리에 커밋되지 않은 변경이 있으면 중단한다.
+`./update.sh`는 `git pull --ff-only`, `uv sync --frozen`, `alembic upgrade head`를 수행한 뒤 기존 worker에 TERM을 보내고(30초 후 KILL) `nohup`으로 새 worker를 띄운다. 새 worker가 3초 안에 죽으면 로그를 출력하고 실패한다. VM 작업 트리에 커밋되지 않은 변경이 있으면 중단한다. `--logs N`으로 마지막 로그 줄 수를 바꾼다.
 
-`postgres → migrate → research-api/research-worker` 순서로 시작한다. 기본 구성은 postgres, migrate(1회 실행), research-api, research-worker, egress-proxy다. Chromium browser worker는 문서를 직접 읽을 수 없을 때만 쓰는 선택 기능이며 메모리를 1.5GB까지 쓴다. 그래서 기본으로 띄우지 않고 모델에게 브라우저 도구도 주지 않는다. 쓰려면 `.env`에 `TRADINGBOT_BROWSER_ENABLED=true`를 넣고 `docker compose --profile browser up -d --build`로 띄운다. PostgreSQL 18의 `/var/lib/postgresql`과 `.research`를 볼륨에 저장한다. API는 호스트 `127.0.0.1:8000`에만 열며 SSH tunnel 등으로 접근한다. 별도 인증 없이 공개 포트로 노출하지 않는다. 모든 서비스는 JSON 로그를 10 MB × 3개로 회전한다.
-
-browser worker는 별도의 non-root 컨테이너다. Toss·OpenAI·검색·DB 자격 증명, 호스트 디렉터리, Docker socket을 전달하지 않는다. read-only filesystem, 제한된 tmpfs, 메모리/CPU/PID 제한, seccomp와 Chromium sandbox를 사용한다. 인터넷은 Squid proxy로 나가며 사설망·loopback·메타데이터 주소와 80/443 외 포트를 막는다. 직접 문서 reader도 이 proxy를 사용한다. Chromium sandbox가 시작되지 않으면 VM의 user namespace/seccomp/AppArmor 설정을 조사하고 sandbox를 끄는 방식으로 우회하지 않는다.
-
-서비스는 heartbeat/HTTP/DB health check를 제공한다. Docker의 `unhealthy` 표시는 자동 복구 자체를 보장하지 않으므로 VM의 서비스 감시로도 상태를 확인한다. 기본 구성은 worker·browser 각각 하나다. 여러 worker로 확장하려면 토큰 소유, browser session 용량, lease 복구 정책을 먼저 변경해야 한다.
+worker는 heartbeat 파일(`.research/worker-heartbeat`)을 갱신한다. 프로세스 감시자가 없으므로 VM이 재부팅되면 worker를 다시 띄워야 한다(`./update.sh` 재실행). 여러 worker로 확장하려면 Toss 토큰 소유와 lease 복구 정책을 먼저 변경해야 한다.
 
 ## 5. 조사 요청과 결과
 
 ```sh
-curl -X POST http://127.0.0.1:8000/research-runs \
-  -H 'Content-Type: application/json' \
-  -d '{"ticker":"AAPL","mode":"deep","question":"공식 실적과 반대 근거를 조사해 신규 진입과 기존 보유자의 행동을 구분해 판단"}'
+echo '{"ticker":"AAPL","mode":"deep","question":"공식 실적과 반대 근거를 조사해 신규 진입과 기존 보유자의 행동을 구분해 판단"}' > request.json
+.venv/bin/tradingbot research AAPL --request request.json --enqueue   # run_id 출력
+.venv/bin/tradingbot status <run_id>   # 진행 상태·checkpoint·실패 코드
+.venv/bin/tradingbot report <run_id>   # 한국어 보고서
 ```
 
-반환된 `run_id`로 다음을 조회한다.
-
-- `GET /research-runs/{run_id}`: 진행 상태·checkpoint·실패 코드
-- `GET /research-runs/{run_id}/report`: typed JSON 보고서
-- `GET /research-runs/{run_id}/markdown`: 한국어 보고서
-- `GET /research-runs/{run_id}/evidence`: 출처·해시·단위·시각·파싱 메타데이터
-
-CLI의 `research TICKER --request request.json --enqueue`도 같은 작업을 생성한다. 수량 제안에는 요청의 `risk` 객체가 필요하다. `portfolio_value`, `currency`, `max_loss_fraction`, `max_position_fraction`, `slippage_fraction`, `tax_fraction`은 사용자가 확인한 입력이다. 실제 NAV나 허용 손실을 추측하지 않는다. 현재 검증기는 같은 통화의 long 거래를 지원한다. 수량 단위는 거래안의 `sizing_unit`으로 정한다. `whole_share`(기본)는 정수 주식이다. `fractional_amount`는 Toss의 금액 기반 미국 시장가 매수로, 0.000001주 단위로 내림하며 체결가가 확정되지 않는다. FX 변환, 누락된 sector/correlation 정보에 의존하는 수량은 거절한다.
+live VM에서는 `--enqueue`로 작업만 넣고 실행은 worker에 맡긴다. CLI가 직접 실행하면 Toss 토큰을 따로 발급해 worker의 토큰을 무효화한다. 수량 제안에는 요청의 `risk` 객체가 필요하다. `portfolio_value`, `currency`, `max_loss_fraction`, `max_position_fraction`, `slippage_fraction`, `tax_fraction`은 사용자가 확인한 입력이다. 실제 NAV나 허용 손실을 추측하지 않는다. 현재 검증기는 같은 통화의 long 거래를 지원한다. 수량 단위는 거래안의 `sizing_unit`으로 정한다. `whole_share`(기본)는 정수 주식이다. `fractional_amount`는 Toss의 금액 기반 미국 시장가 매수로, 0.000001주 단위로 내림하며 체결가가 확정되지 않는다. FX 변환, 누락된 sector/correlation 정보에 의존하는 수량은 거절한다.
 
 최종 결정은 등급·신규 진입 행동·보유자 행동·논지 상태·거래안이 [결정 계약](INVESTMENT_POLICY.md#decision-contract)과 일치해야 한다. 예를 들어 `Sell`과 추가 매수, `Buy`와 무효화된 논지, `Sell`과 long 진입 계획은 숫자가 맞아도 거절한다. `판단 보류`가 아닌 모든 등급은 근거가 있는 논지 claim이 필요하다.
 
@@ -121,7 +102,7 @@ FACT/INTERPRETATION 문장에 나온 숫자마다 검증된 `numeric_references`
 
 **`extract_fact`:** 원문에 적힌 숫자와 단위(`scale`)를 받는다. 저장되는 값은 숫자 × 단위다. 표 행을 인용할 때는 표 머리의 "In millions" 같은 단위 표기를 인용문 자체나 앞 6,000자 안에서 찾아 확인하고, 어디서 찾았는지 기록한다. 통화도 같은 범위에서 확인하며 인용문 뒤의 다른 표기는 사용하지 않는다. 인용문 비교는 공백을 정규화한다. 기술지표·추출 fact는 원본 종목, 계산은 첫 입력 종목을 유지한다. 정밀 거래·보유 감시선은 파생 입력까지 종목 일관성을 검증하므로 다른 종목을 잘못 붙인 기존 파생 근거도 거절한다.
 
-모델 context에는 근거 원문 대신 **evidence index**가 들어간다. 각 근거마다 ID·출처·시각·freshness, 최대 40개 fact, 300자 snippet, 요약 payload만 넣는다. PDF 페이지, 봉 데이터, 브라우저 요소 목록은 넣지 않는다. 도구 결과는 index 항목과 4,000자 미리보기로 돌려주고, 한 단계 대화에서 오래된 도구 결과는 evidence ID로 축약하며 screenshot은 최신 1장만 남긴다. 세부 내용은 `evidence_read`로 필요할 때 읽는다. `evidence_read`는 읽기 전용 view이므로 새 근거를 만들지 않는다.
+모델 context에는 근거 원문 대신 **evidence index**가 들어간다. 각 근거마다 ID·출처·시각·freshness, 최대 40개 fact, 300자 snippet, 요약 payload만 넣는다. PDF 페이지와 봉 데이터는 넣지 않는다. 도구 결과는 index 항목과 4,000자 미리보기로 돌려주고, 한 단계 대화에서 오래된 도구 결과는 evidence ID로 축약한다. 세부 내용은 `evidence_read`로 필요할 때 읽는다. `evidence_read`는 읽기 전용 view이므로 새 근거를 만들지 않는다.
 
 `material_gaps`에는 `blocking`/`non_blocking` 심각도가 있다. 판단을 막는 gap은 research manager(blocking gap과 `evidence_sufficient=false`)와 PM만 확정한다. bull·bear·리스크·premortem 단계의 gap은 PM에게 open gap으로 전달되며, 한 단계가 단독으로 `판단 보류`를 강제하지 않는다. `판단 보류`는 blocking gap을 하나 이상 명시해야 한다.
 
@@ -135,9 +116,9 @@ ETF(레버리지·인버스 제외)는 별도 경로로 조사한다. SEC fund t
 
 ## 7. 보존과 replay
 
-근거의 원문 hash, source, published/effective/retrieved time, parser version, 숫자 단위와 기간을 저장한다. 기본적으로 SEC 등 설정된 원천의 문서만 본문을 보존한다. 다른 문서는 조사 중에 읽고 DB에는 metadata·hash·최대 1,200자 snippet·짧은 수치 인용을 저장한다. PDF 페이지 번호를 유지하고 별도 download 원본은 브라우저 sandbox 종료 시 지운다.
+근거의 원문 hash, source, published/effective/retrieved time, parser version, 숫자 단위와 기간을 저장한다. 기본적으로 SEC 등 설정된 원천의 문서만 본문을 보존한다. 다른 문서는 조사 중에 읽고 DB에는 metadata·hash·최대 1,200자 snippet·짧은 수치 인용을 저장한다. PDF 페이지 번호를 유지한다.
 
-`TRADINGBOT_RETAINED_DOCUMENT_HOSTS`는 JSON 배열이다. 계약/약관상 허용된 호스트만 추가한다. screenshot은 모델에 전달하고 hash를 기록하지만 파일 보존은 기본적으로 꺼져 있다. 사용 허용 범위를 확인한 후 `TRADINGBOT_RETAIN_BROWSER_SCREENSHOTS=true`로 켤 수 있다.
+`TRADINGBOT_RETAINED_DOCUMENT_HOSTS`는 JSON 배열이다. 계약/약관상 허용된 호스트만 추가한다.
 
 이전 버전의 `evidence_read`는 발췌문을 새 근거로 저장해 비승인 호스트 본문이 최대 24,000자까지 보존될 수 있었다. 이제 `evidence_read`는 저장하지 않는 view다. 재시작으로 재개된 run은 비승인 호스트 문서의 snippet만 갖고 있다. 그러나 이미 검증된 인용은 `quotation` 근거로 남아 있으므로 재검증할 수 있다.
 
@@ -145,7 +126,7 @@ ETF(레버리지·인버스 제외)는 별도 경로로 조사한다. SEC fund t
 
 ## 8. 감시·알림·평가
 
-성공한 live 연구 종목과 Toss 계좌의 USD 보유 종목은 자동으로 감시한다. 새로 발견한 보유 종목은 `기존 보유` 상태로 `TRADINGBOT_HOLDING_RESEARCH_MODE`(기본 quick) 첫 조사를 요청한다. 정규장 중이면 바로, 아니면 다음 정기 조사 시점에 돈다. 감시 종목은 거래일마다 재조사되므로 종목 수와 모드가 모델·검색 비용을 결정한다. 재조사의 투자자 상태는 계좌 기준으로 맞춘다. 보유 중이면 `기존 보유`, 전량 매도했으면 `신규 진입 검토`가 된다. 단, 요청이 `일부 매도 검토`였으면 그대로 둔다. 조건 확인은 60초, 계좌는 300초 간격이다. 정기 재조사는 Toss 미국 장 운영 캘린더 기준으로 **거래일 정규장 개장 10분 후**(`TRADINGBOT_MARKET_OPEN_OFFSET_MINUTES`) 한 번 돌고, 주말과 휴장일은 건너뛴다. 예) 서머타임 중 한국 시간 22:40, 해제 후 23:40. 정규장 중에는 정밀 가격 수준을 90초 이내의 새 시세로 검증한다. 장 마감 후·주말·휴장일에는 직전 정규장 종료 시점에 유효했던 시세를 다음 정규장 개장 전까지 기준 가격으로 인정한다. 그래서 장외 시간 조사도 시세 신선도만으로 `판단 보류`가 되지는 않는다. 그래도 정기 조사를 개장 후에 두는 이유는 정규장 가격으로 진입 범위와 손절선을 검증하기 위해서다. 보유 종목이 여러 개면 worker가 순서대로 처리하므로 개장 후 1시간 안팎에 결과가 모인다. `TRADINGBOT_RESEARCH_SCHEDULE=interval`이면 이전처럼 `TRADINGBOT_RESEARCH_INTERVAL_HOURS` 간격으로 돈다. 가격·수량 이벤트에 의한 재조사는 일정과 무관하게 즉시 요청한다. 한 번의 확인에서 모든 대상 시세를 `/prices`로 일괄 조회하며(호출당 200종목, 장 운영 calendar 1회), 계좌는 모든 종목이 공유하는 snapshot 하나를 300초마다 조회한다. 같은 process 안에서는 계좌 조회 결과를 60초 동안 재사용한다. Toss 호출은 rate-limit 그룹(`MARKET_DATA` 15/s, `MARKET_DATA_CHART` 20/s, `ACCOUNT` 1/s 등)별 token bucket으로 조절한다. 초기값은 공식 문서 수치이고 이후 `X-RateLimit-*` 응답 헤더로 갱신한다. 실시간 WebSocket은 사용하지 않는다. REST 일괄 조회로 60초 주기 감시가 충분하기 때문이다.
+성공한 live 연구 종목과 Toss 계좌의 USD 보유 종목은 자동으로 감시한다. 새로 발견한 보유 종목은 `기존 보유` 상태로 `TRADINGBOT_HOLDING_RESEARCH_MODE`(기본 quick) 첫 조사를 요청한다. 정규장 중이면 바로, 아니면 다음 정기 조사 시점에 돈다. 감시 종목은 거래일마다 재조사되므로 종목 수와 모드가 모델·검색 비용을 결정한다. 재조사의 투자자 상태는 계좌 기준으로 맞춘다. 보유 중이면 `기존 보유`, 보유하지 않은 종목을 직접 감시 등록했으면 `신규 진입 검토`가 된다. 단, 요청이 `일부 매도 검토`였으면 그대로 둔다. 보유 중이던 종목(계좌 자동 등록, 직전 수량 > 0, 직전 보고서가 `ACTIVE_POSITION`)을 전량 매도하면 `보유 수량 변경: X → 0주 (전량 청산)` 알림을 한 번 보내고 감시와 정기 재조사를 끝낸다. 다시 매수하면 계좌 자동 감시가 새로 등록한다. 조건 확인은 60초, 계좌는 300초 간격이다. 정기 재조사는 Toss 미국 장 운영 캘린더 기준으로 **거래일 정규장 개장 10분 후**(`TRADINGBOT_MARKET_OPEN_OFFSET_MINUTES`) 한 번 돌고, 주말과 휴장일은 건너뛴다. 예) 서머타임 중 한국 시간 22:40, 해제 후 23:40. 정규장 중에는 정밀 가격 수준을 90초 이내의 새 시세로 검증한다. 장 마감 후·주말·휴장일에는 직전 정규장 종료 시점에 유효했던 시세를 다음 정규장 개장 전까지 기준 가격으로 인정한다. 그래서 장외 시간 조사도 시세 신선도만으로 `판단 보류`가 되지는 않는다. 그래도 정기 조사를 개장 후에 두는 이유는 정규장 가격으로 진입 범위와 손절선을 검증하기 위해서다. 보유 종목이 여러 개면 worker가 순서대로 처리하므로 개장 후 1시간 안팎에 결과가 모인다. `TRADINGBOT_RESEARCH_SCHEDULE=interval`이면 이전처럼 `TRADINGBOT_RESEARCH_INTERVAL_HOURS` 간격으로 돈다. 가격·수량 이벤트에 의한 재조사는 일정과 무관하게 즉시 요청한다. 한 번의 확인에서 모든 대상 시세를 `/prices`로 일괄 조회하며(호출당 200종목, 장 운영 calendar 1회), 계좌는 모든 종목이 공유하는 snapshot 하나를 300초마다 조회한다. 같은 process 안에서는 계좌 조회 결과를 60초 동안 재사용한다. Toss 호출은 rate-limit 그룹(`MARKET_DATA` 15/s, `MARKET_DATA_CHART` 20/s, `ACCOUNT` 1/s 등)별 token bucket으로 조절한다. 초기값은 공식 문서 수치이고 이후 `X-RateLimit-*` 응답 헤더로 갱신한다. 실시간 WebSocket은 사용하지 않는다. REST 일괄 조회로 60초 주기 감시가 충분하기 때문이다.
 
 감시 중 조회한 시세·계좌·발굴 스크리닝은 `monitor_observations`에 저장하며, 완료된 보고서의 근거 원장은 변경하지 않는다(완료된 run에 근거를 추가하면 오류). 거래안이 있는 종목은 60초마다 시세 관측값이 쌓인다(종목당 하루 최대 약 1,440행, 장 운영 calendar 포함). 이전 버전이 보고서 근거 테이블에 쌓던 양과 같다. 아직 자동 정리 작업이 없으므로 DB 크기를 주기적으로 확인한다. 진입 범위·손절·목표 도달은 **정규장 시세로만** 판정한다. 프리·애프터·데이마켓의 얇은 거래 가격으로는 알리지 않고, 장외 급변은 다음 정규장 시작 직후 판정한다. 장이 닫혀 있을 때 시세가 오래된 것은 조회 실패로 보지 않는다. 이미 알린 가격 신호는 장이 닫혔다 열려도 같은 이탈이 계속되는 한 다시 보내지 않는다.
 
@@ -153,7 +134,7 @@ ETF(레버리지·인버스 제외)는 별도 경로로 조사한다. SEC fund t
 
 진입 범위·손절·목표 도달, 보유 손절·익절 도달, 해당 종목의 보유 수량 변화, 데이터 조회 실패가 재조사를 요청한다. 계좌 조회 실패는 보유 중(`ACTIVE_POSITION`)인 종목에만 알린다. 재조사는 감시를 만든 요청의 위험 입력·기간·투자자 상태·질문·모드를 계승하고, 무효화 가격 도달 시 `critical`로 올리며, 이전 보고서 이후 무엇이 바뀌었는지를 `trigger`로 전달한다. free-text 조건은 미확인 요건이며 가격만으로 만족한 것으로 간주하지 않는다. 가격 범위에 들어오면 추가 요건이 남아 있어도 `ENTRY_REVIEW_REQUIRED`로 재조사를 요청하고, 모델은 근거로 요건 충족을 확인한 뒤에만 조건을 해제한다.
 
-기본 `report_policy=changes`는 등급·논지·후보·보유 손절선·자료 품질·새 근거 변화만 알린다. 보고서 하나는 알림 하나다. `변경:` 줄에 바뀐 항목을 모두 나열하고, 신규·보유 행동과 손절선, 요약을 한 번만 붙인다. `판단 보류`이면 차단 사유(blocking gap)를 최대 3건, 새 근거가 있으면 그 주장을 최대 3건 함께 보낸다. 같은 근거의 표현 변경은 새 근거에서 제외한다. 시세·일봉·기술지표·계좌·수수료처럼 조회할 때마다 값이 바뀌는 스냅샷과 그것에서만 계산된 근거를 인용한 주장도 새 근거로 보지 않는다. 가격·보유 수량 변화는 감시 이벤트가 따로 알린다. 감시 이벤트 알림은 내부 코드 대신 `보유 손절선 도달`, `익절 검토 가격 1 도달` 같은 이름과 직전 리서치 시각(KST)을 표시한다. 주기적으로 동일한 관찰 목록을 보내지 않는다. `always`와 `none`은 report 알림 정책이고 별도 감시 이벤트는 유지한다. Discord에는 mention을 허용하지 않는다. report 알림은 24시간, 즉시 조건 알림은 15분 이후 만료시켜 복구 후 오래된 신호를 보내지 않는다. outbox는 재시도하며 webhook 응답 유실 시 중복 전송 가능성이 있다.
+기본 `report_policy=changes`는 등급·논지·후보·보유 손절선·자료 품질·새 근거 변화만 알린다. 보고서 하나는 알림 하나다. `변경:` 줄에 바뀐 항목을 모두 나열하고, 신규·보유 행동과 손절선, 요약을 한 번만 붙인다. `판단 보류`이면 차단 사유(blocking gap)를 최대 3건, 새 근거가 있으면 그 주장을 최대 3건 함께 보낸다. 같은 근거의 표현 변경은 새 근거에서 제외한다. 시세·일봉·기술지표·계좌·수수료처럼 조회할 때마다 값이 바뀌는 스냅샷과 그것에서만 계산된 근거를 인용한 주장도 새 근거로 보지 않는다. 가격 수준 도달(진입·손절·목표·무효화)은 감시 이벤트가 즉시 따로 알린다. 보유 수량 변화와 데이터 조회 실패는 재조사만 요청하고 별도 알림을 보내지 않는다. 그 재조사의 보고 알림에 `계기:` 줄로 표시되며, 등급 등이 바뀌지 않아도 알림이 나간다. 감시 이벤트 알림은 내부 코드 대신 `보유 손절선 도달`, `익절 검토 가격 1 도달` 같은 이름과 직전 리서치 시각(KST)을 표시한다. 주기적으로 동일한 관찰 목록을 보내지 않는다. `always`와 `none`은 report 알림 정책이고 별도 감시 이벤트는 유지한다. Discord에는 mention을 허용하지 않는다. report 알림은 24시간, 즉시 조건 알림은 15분 이후 만료시켜 복구 후 오래된 신호를 보내지 않는다. outbox는 재시도하며 webhook 응답 유실 시 중복 전송 가능성이 있다.
 
 평가기는 benchmark와 공통인 완료·수정 daily session을 맞춰 1/5/20/60일 수익률과 benchmark 상대 수익률, high/low MFE·MAE를 기록한다. 기준은 보고서의 뉴욕 날짜 이후 첫 공통 종가이며 16시 이후 보고서는 다음 날짜부터 시작한다. MFE·MAE는 기준 종가 이후 session만 사용한다. 이는 실제 체결가나 조기 폐장 calendar가 반영된 체결 simulation이 아니다. 실제 체결을 수집하지 않으므로 realized R은 `null`이다. 등급 전환, 무효화, 조건 hit, stale/source failure는 보고서·trace·outbox에 기록한다. alert precision/false alert의 판정과 aggregate 통계는 아직 별도 평가 데이터가 필요하다.
 
@@ -169,29 +150,25 @@ ETF(레버리지·인버스 제외)는 별도 경로로 조사한다. SEC fund t
 
 ## 9. 백업과 복구
 
-Oracle VM에서 정기적으로 DB dump와 research volume을 별도 저장소에 복사한다. 예시에서는 파일명을 고정했으므로 기존 파일을 덮어쓰지 않도록 날짜별 이름을 사용한다.
+Oracle VM에서 정기적으로 SQLite DB와 `.research` 디렉터리를 별도 저장소에 복사한다. 실행 중인 DB는 파일 복사 대신 SQLite online backup을 사용하고, 날짜별 파일명으로 기존 백업을 덮어쓰지 않는다.
 
 ```sh
-docker compose exec -T postgres pg_dump -U research -d research -Fc -f /tmp/research-backup.dump
-docker compose cp postgres:/tmp/research-backup.dump ./research-backup.dump
+.venv/bin/python -c "import sqlite3,datetime as d; s=sqlite3.connect('.research/live.db'); t=sqlite3.connect(f'live-{d.date.today()}.db'); s.backup(t); t.close()"
 ```
 
 migration `0002`는 `monitor_observations` 테이블과 `outcomes.mature` 컬럼을, `0003`은 검색 사용 기록 `search_usage` 테이블을 추가한다. 기존 보고서 JSON은 다시 쓰지 않는다. 자유 서술 행동은 `DEFER`와 "(이전 형식 자유 서술)" 표시가 붙은 note로 읽고, 옛 PM gap은 blocking, 단계별 gap은 non_blocking으로 읽는다.
 
 거래 초안 필드는 기존 보고서에서 null로 읽으며 추가 DB migration은 없다. 재개 checkpoint에는 검토 초안의 위험 조건 hash가 남아 같은 초안의 완료된 리스크 검토를 재사용한다. hash가 없는 옛 checkpoint의 리스크 검토는 현재 초안으로 다시 수행한다.
 
-`.env`의 비밀값은 Git이나 browser volume에 보관하지 않는다. backup에는 계좌 snapshot과 report가 포함되므로 접근을 제한한다. 복구는 worker와 API를 중지하고 별도 새 DB에 dump를 복원한 후 `alembic upgrade head`를 수행한다. 단일 worker만 시작해 남은 job을 재개한다. 운영 DB에 `init-db`, legacy schema import, Alembic 초기 revision을 강제로 stamp하는 방법을 사용하지 않는다.
+`.env`의 비밀값은 Git에 보관하지 않는다. backup에는 계좌 snapshot과 report가 포함되므로 접근을 제한한다. 복구는 worker를 중지하고 백업 파일을 `TRADINGBOT_DATABASE_URL` 위치에 둔 후 `alembic upgrade head`를 수행한다. 단일 worker만 시작해 남은 job을 재개한다. 운영 DB에 `init-db`, legacy schema import, Alembic 초기 revision을 강제로 stamp하는 방법을 사용하지 않는다.
 
 ## 10. 검증
 
 ```powershell
-uv run playwright install chromium
 uv run pytest -q
 uv run ruff check src tests migrations
 uv run ruff format --check src tests migrations
 uv build
 ```
 
-단위 테스트는 실제 broker/web/model에 연결하지 않는다. Chromium 통합 테스트도 로컬 HTTP fixture로만 수행한다. PostgreSQL 검증은 **비어 있는 전용 테스트 DB**의 `TEST_DATABASE_URL`을 설정한 후 실행한다. 테스트는 DB에 migration과 합성 report를 남긴다.
-
-CI는 PostgreSQL 18 통합 테스트, Chromium, wheel build, 세 Dockerfile build를 수행하도록 구성했다. 로컬 Docker daemon·실제 API 키·Oracle 환경이 없으면 그 검증을 수행했다고 주장하지 않는다. 배포 후 실제 quote timestamp·완료 봉·계좌 완전성·SEC 수집·모델 계약·브라우저 sandbox·Discord webhook·재시작 복구를 작은 범위에서 확인해야 한다.
+단위 테스트는 실제 broker/web/model에 연결하지 않는다. CI는 ruff·pytest·wheel build를 수행하며, 성공해야 VM 배포가 진행된다. 실제 API 키와 Oracle 환경은 CI에서 검증하지 않으므로 배포 후 실제 quote timestamp·완료 봉·계좌 완전성·SEC 수집·모델 계약·Discord webhook·재시작 복구를 작은 범위에서 확인해야 한다.

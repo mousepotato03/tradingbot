@@ -71,7 +71,7 @@ def test_evidence_read_is_a_view_and_creates_no_evidence():
     assert len(page["facts"]) == 50 and page["next_start"] == 50 and page["total_facts"] == 120
 
 
-def test_prune_condenses_old_outputs_and_keeps_latest_screenshot():
+def test_prune_condenses_old_outputs():
     messages = [{"role": "system", "content": "p"}, {"role": "user", "content": "c"}]
     for i in range(10):
         messages.append(
@@ -81,7 +81,6 @@ def test_prune_condenses_old_outputs_and_keeps_latest_screenshot():
                 "output": json.dumps({"evidence_id": f"ev-{i}", "text_preview": "x" * 4000}),
             }
         )
-        messages.append({"role": "user", "content": [{"type": "input_image", "image_url": i}]})
     ResearchEngine._prune(messages)
     outputs = [m for m in messages if m.get("type") == "function_call_output"]
     assert len(outputs) == 10  # every call keeps its paired output
@@ -89,8 +88,6 @@ def test_prune_condenses_old_outputs_and_keeps_latest_screenshot():
     assert all("text_preview" not in m["output"] for m in condensed)
     assert json.loads(condensed[0]["output"])["evidence_id"] == "ev-0"
     assert all("text_preview" in m["output"] for m in outputs[-FULL_TOOL_OUTPUTS:])
-    images = [m for m in messages if isinstance(m.get("content"), list)]
-    assert len(images) == 1 and images[0]["content"][0]["image_url"] == 9
 
 
 class Gaps(FixtureModel):

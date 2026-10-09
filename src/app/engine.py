@@ -4,7 +4,6 @@ from decimal import Decimal
 
 from pydantic import ValidationError
 
-from app.adapters.browser import BrowserAdapter
 from app.adapters.fixture import FixtureAdapters
 from app.adapters.http import ToolError
 from app.adapters.sec import SecAdapter
@@ -51,7 +50,6 @@ from app.reporting import markdown
 from app.schedule import next_research_at
 from app.storage import Store
 from app.tools import (
-    BrowserAction,
     CalculateInput,
     EvidenceReadInput,
     ExtractFactInput,
@@ -94,8 +92,6 @@ FULL_TOOL_OUTPUTS = 6
 HEAVY_PAYLOAD_KEYS = {
     "pages",
     "candles",
-    "elements",
-    "downloads",
     "calendar",
     "observations",
     "metrics",
@@ -280,24 +276,8 @@ class ResearchEngine:
             "Read stored evidence in detail: part=text (search/paginate the body), facts "
             "(filter by name) or payload. The context only carries an index and snippets.",
         )
-        browser = BrowserAdapter(self.settings, run_id, tools)
-        # The Chromium worker is an optional fallback; without it the model is not offered
-        # tools that could only fail.
-        if self.settings.browser_enabled:
-            tools.add(
-                "browser_open",
-                UrlInput,
-                browser.open,
-                "Browser fallback for dynamic sources. Returns text, element refs and screenshot.",
-            )
-            tools.add(
-                "browser_action",
-                BrowserAction,
-                browser.action,
-                "Operate the current read-only browser by element refs or screenshot coordinates.",
-            )
         tools.records = self.store.evidence(run_id)
-        return tools, browser
+        return tools
 
     def run(self, run_id: str) -> ResearchReport:
         run = self.store.get_run(run_id)
@@ -305,7 +285,7 @@ class ResearchEngine:
             return self.store.get_report(run_id)
         self.store.start_run(run_id, self.settings.worker_lease_seconds)
         request = ResearchRequest.model_validate(run["request"])
-        tools, browser = self.registry(run_id, request)
+        tools = self.registry(run_id, request)
         checkpoint = run["checkpoint"]
         if "execution_started_at" not in checkpoint:
             checkpoint["execution_started_at"] = utcnow().isoformat()
@@ -508,15 +488,6 @@ class ResearchEngine:
                                 "output": json.dumps(output, ensure_ascii=False, default=str),
                             }
                         )
-                        while tools.images:
-                            messages.append(
-                                {
-                                    "role": "user",
-                                    "content": [
-                                        {"type": "input_image", "image_url": tools.images.pop(0)}
-                                    ],
-                                }
-                            )
                     continue
                 if result.result is None:
                     raise ToolError("MODEL_EMPTY")
@@ -753,8 +724,6 @@ class ResearchEngine:
         except Exception as error:
             self.store.fail(run_id, type(error).__name__)
             raise
-        finally:
-            browser.close()
         identity = next(
             (
                 r
@@ -1005,19 +974,11 @@ class ResearchEngine:
         output = self._index_entry(record, utcnow())
         output["text_preview"] = record.text[:TOOL_TEXT_PREVIEW]
         output["text_truncated"] = len(record.text) > TOOL_TEXT_PREVIEW
-        if record.evidence_type == "browser":
-            # browser_action needs the current element refs and tabs.
-            output["elements"] = record.payload.get("elements", [])
-            output["tabs"] = record.payload.get("tabs", [])
-            output["downloads"] = [
-                {k: d.get(k) for k in ("url", "size", "content_hash", "warning")}
-                for d in record.payload.get("downloads", [])
-            ]
         return output
 
     @staticmethod
     def _prune(messages: list[dict]) -> None:
-        """Keep recent tool outputs and the latest screenshot; older ones live in the index."""
+        """Keep recent tool outputs; older ones live in the index."""
         outputs = [m for m in messages if m.get("type") == "function_call_output"]
         for message in outputs[:-FULL_TOOL_OUTPUTS]:
             try:
@@ -1031,17 +992,6 @@ class ResearchEngine:
                     "evidence_read.",
                 }
             )
-        images = [
-            i
-            for i, m in enumerate(messages)
-            if isinstance(m.get("content"), list)
-            and any(
-                isinstance(part, dict) and part.get("type") == "input_image"
-                for part in m["content"]
-            )
-        ]
-        for index in reversed(images[:-1]):
-            messages.pop(index)
 
     @staticmethod
     def _previous_summary(previous: ResearchReport) -> dict:

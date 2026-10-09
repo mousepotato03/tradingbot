@@ -72,10 +72,7 @@ def test_model_facing_schemas_have_no_regex_lookaround(store, settings):
         PortfolioDecision,
         TriageDecision,
     )
-    registry, browser = ResearchEngine(settings, store).registry(
-        "run", ResearchRequest(ticker="TEST")
-    )
-    browser.close()
+    registry = ResearchEngine(settings, store).registry("run", ResearchRequest(ticker="TEST"))
     schemas = [strict_schema(m) for m in responses]
     schemas += [contract["parameters"] for contract in registry.contracts()]
     text = json.dumps(schemas)
@@ -149,19 +146,3 @@ def test_evidence_ids_are_short_and_typed():
     assert fixture.quote("TEST").evidence_id.startswith("qt-")
     assert fixture.financials("TEST").evidence_id.startswith("fin-")
     assert len(fixture.ohlcv("TEST").evidence_id) == len("px-") + 10
-
-
-def test_browser_tools_are_offered_only_when_the_fallback_is_enabled(store, settings):
-    from app.engine import ResearchEngine
-    from app.models import ResearchRequest
-
-    def names(config):
-        registry, browser = ResearchEngine(config, store).registry(
-            "run", ResearchRequest(ticker="TEST")
-        )
-        browser.close()
-        return set(registry.definitions)
-
-    assert not {"browser_open", "browser_action"} & names(settings)
-    enabled = settings.model_copy(update={"browser_enabled": True})
-    assert {"browser_open", "browser_action"} <= names(enabled)

@@ -30,7 +30,6 @@ EVIDENCE_PREFIXES = {
     "fund_holdings": "fund",
     "search": "srch",
     "document": "doc",
-    "browser": "web",
     "calculation": "calc",
     "extracted_fact": "xf",
     "quotation": "quo",

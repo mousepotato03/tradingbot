@@ -64,9 +64,7 @@ The system should therefore support:
 - long-running services
 - scheduled jobs
 - event-driven re-analysis
-- headless Chromium
-- Playwright
-- containerized workers
+- a single long-running worker process
 - persistent database
 - Discord output
 - secure secret injection
@@ -84,7 +82,7 @@ It means preserving the research behavior:
 - prefer primary sources
 - open the source instead of trusting search snippets
 - compare different dates carefully
-- use browser automation when direct reading is insufficient
+- report a source as unavailable when direct reading is insufficient
 - examine filings, IR, news, macro, sector, technicals, and portfolio context together
 - stop and say `판단 보류` when data quality is not good enough
 - avoid inventing precise numbers merely to complete a template

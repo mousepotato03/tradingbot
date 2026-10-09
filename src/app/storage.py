@@ -426,8 +426,6 @@ class Store:
                 .where(JobRow.status == "PENDING", JobRow.available_at <= now)
                 .order_by(JobRow.available_at)
             )
-            if self.engine.dialect.name == "postgresql":
-                query = query.with_for_update(skip_locked=True)
             row = session.scalars(query.limit(1)).first()
             if row is None:
                 return None

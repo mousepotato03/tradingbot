@@ -21,14 +21,14 @@ The core split is:
                 │ Research Director    │
                 └──────────┬───────────┘
                            │
-          ┌────────────────┼────────────────┐
-          v                v                v
-┌────────────────┐ ┌────────────────┐ ┌────────────────┐
-│ Structured Data│ │ Web Research   │ │ Browser Worker │
-│ Toss / SEC etc │ │ search / read  │ │ Playwright     │
-└───────┬────────┘ └───────┬────────┘ └───────┬────────┘
-        └───────────────────┼──────────────────┘
-                            v
+             ┌─────────────┴─────────────┐
+             v                           v
+     ┌────────────────┐          ┌────────────────┐
+     │ Structured Data│          │ Web Research   │
+     │ Toss / SEC etc │          │ search / read  │
+     └───────┬────────┘          └───────┬────────┘
+             └─────────────┬─────────────┘
+                           v
                    ┌──────────────────┐
                    │ Evidence Ledger  │
                    └────────┬─────────┘
@@ -64,15 +64,14 @@ v0.1 keeps these boundaries in small typed modules rather than creating empty pa
 | Boundary | Implementation |
 |---|---|
 | Schemas / evidence validation | `app/models.py`, `app/evidence.py` |
-| Provider adapters | `app/adapters/{toss,sec,web,browser,http}.py` |
+| Provider adapters | `app/adapters/{toss,sec,web,http}.py` |
 | Tool contracts / calculations | `app/tools.py`, `app/analytics.py` |
 | Model port / orchestration | `app/llm.py`, `app/engine.py` |
 | Numerical / trade validation | `app/validation.py` |
 | Persistence / migrations | `app/storage.py`, `migrations/` |
 | Candidates / monitoring | `app/lifecycle.py`, `app/discovery.py`, `app/monitoring.py` |
 | Notifications / evaluation | `app/notifications.py`, `app/evaluation.py` |
-| API / CLI / worker | `app/api.py`, `app/cli.py`, `app/worker.py` |
-| Isolated Chromium | `worker_browser/server.py` |
+| CLI / worker | `app/cli.py`, `app/worker.py` |
 
 The larger layout below is a possible expansion path; it is not a requirement to import another agent framework.
 
@@ -96,7 +95,6 @@ src/
       contracts.py
       web_search.py
       web_reader.py
-      browser.py
       python_calc.py
 
     evidence/
@@ -147,13 +145,6 @@ src/
       models.py
       repository.py
 
-  worker_browser/
-    server.py
-    playwright_runner.py
-
-  api/
-    main.py
-
 tests/
   unit/
   integration/
@@ -162,29 +153,16 @@ tests/
 
 Names may change, but boundaries should remain.
 
-## 4. Service boundaries on Oracle VM
+## 4. Runtime on Oracle VM
 
-Recommended deployment:
+One process runs on the VM directly from the project virtualenv (no containers):
 
 ```
-docker compose
-  research-api
-  research-worker
-  migrate
-  browser-worker
-  postgres
-  egress-proxy
+.venv/bin/tradingbot worker   (nohup, log: .research/worker.log)
+SQLite database               (.research/live.db, Alembic migrations)
 ```
 
-### research-api
-
-Owns:
-
-- request validation and durable queue submission
-- read-only status, reports and evidence endpoints
-- local-only host binding
-
-It does not receive broker/model/search credentials.
+Research requests are queued with the CLI (`tradingbot research TICKER --enqueue`), and reports are read with `tradingbot status/report`. GitHub Actions deploys `main` after checks pass by running `update.sh` on the VM through a key restricted to that command.
 
 ### research-worker
 
@@ -200,33 +178,9 @@ Owns:
 
 One worker owns the Toss token and serializes token issuance. This avoids invalidating another process's token. Requests are paced per Toss rate-limit group (for example `MARKET_DATA`, `MARKET_DATA_CHART`, `ACCOUNT`, `ORDER_INFO`) by token buckets seeded from the documented limits and updated from `X-RateLimit-*` headers, so a chart or account call does not delay quotes. A scheduler thread runs condition checks alongside research; a separate maintenance thread runs discovery triage and outcome refresh so slow model or history calls never delay entry/stop checks. Persistent jobs/checkpoints survive process restart; startup recovery assumes the previous sole worker has stopped.
 
-### browser-worker (optional)
-
-Off by default: it starts only with the Compose `browser` profile and `TRADINGBOT_BROWSER_ENABLED=true`. Without it, the model is not offered browser tools and research uses structured sources, search and the direct document reader.
-
-Owns:
-
-- Chromium
-- Playwright
-- page rendering
-- clicking/typing
-- screenshots
-- downloads
-
-Security:
-
-- no broker credentials
-- no SSH keys
-- no root socket
-- no unrestricted host filesystem
-- strict network/time/resource limits where practical
-- private destinations rejected by both URL validation and an egress proxy
-- read-only non-root container; no core database network membership
-- read-only browsing: only GET/HEAD leave the page. POST is blocked unless the exact hostname is in `BROWSER_POST_ALLOWED_HOSTS` (empty by default); PUT/PATCH/DELETE and WebSockets are always blocked. Blocked requests are reported in each observation so prompt-injected form submissions are visible and inert.
-
 ### database
 
-Production Compose uses PostgreSQL 18 and Alembic. SQLite is used for offline fixtures and unit tests. Report/state/outbox updates are committed atomically. Existing legacy tables are not migrated into the new schema.
+Production uses SQLite with Alembic migrations (`alembic upgrade head` on every deploy). Offline fixtures and unit tests also use SQLite. Report/state/outbox updates are committed atomically. Existing legacy tables are not migrated into the new schema.
 
 ## 5. Domain entities
 
@@ -453,7 +407,7 @@ Examples:
 - stale quote -> no precise trade plan
 - missing filing -> lower confidence
 - conflicting financial data -> 판단 보류 if material
-- browser failure -> retry via alternate source or mark unavailable
+- unreadable page -> retry via alternate source or mark unavailable
 - hallucinated uncited number -> schema/validator rejection
 - impossible stop/target geometry -> validator rejection
 - model outputs unsupported claim -> remove/retry or downgrade confidence
@@ -462,7 +416,9 @@ Never silently fill missing evidence with guessed numbers.
 
 ## 11. v0.1 deployment and migration impact
 
-The rationale for the initial service split is token ownership and browser isolation. Tavily is the default search adapter and Brave is selectable; native OpenAI Responses tools provide autonomous research while direct HTML/PDF reads precede Chromium fallback. Screenshot-coordinate operations are ordinary restricted browser tools, without a model-accessible shell.
+A single worker owns the Toss token. Tavily is the default search adapter and Brave is selectable; native OpenAI Responses tools provide autonomous research through structured sources, search and direct HTML/PDF reads, without a model-accessible shell or browser.
+
+The Docker/Compose packaging, PostgreSQL wiring, read-only HTTP API, Chromium browser worker and egress proxy were removed because the VM never ran them. Stored reports are unaffected (no browser evidence was ever recorded); leftover `TRADINGBOT_BROWSER_*`, `TRADINGBOT_POSTGRES_PASSWORD` and `TRADINGBOT_EGRESS_PROXY` values in `.env` are ignored.
 
 There is no dependency on TradingAgents or its decision graph. Initial migration `0001` creates a new database. Migration `0002` adds `monitor_observations` and `outcomes.mature`; reports written before the action enums and gap severity load unchanged through model-level coercion (free-text actions become `DEFER` with the original text kept as a marked note; old PM gaps become blocking, old stage gaps advisory). They are not re-validated on load. Old recommendation history must be separately imported and marked as legacy if that work is authorized later. Current fixture reports are clearly synthetic and cannot emit live notifications. See [runtime and operations](RUNTIME.md) for credentials, backup, limits and live acceptance checks.
 

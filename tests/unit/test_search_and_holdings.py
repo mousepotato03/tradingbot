@@ -99,13 +99,10 @@ def test_live_search_tool_stops_at_the_local_cap(store, settings):
     engine = ResearchEngine(settings, store)
     engine.settings = settings.model_copy(update={"mode": "live", "search_monthly_limit": 1})
     run_id = store.enqueue(ResearchRequest(ticker="TEST"))
-    tools, browser = engine.registry(run_id, ResearchRequest(ticker="TEST"))
-    try:
-        assert tools.execute("web_search", {"query": "first"}).evidence_type == "search"
-        with pytest.raises(ToolError, match="SEARCH_MONTHLY_LIMIT"):
-            tools.execute("web_search", {"query": "second"})
-    finally:
-        browser.close()
+    tools = engine.registry(run_id, ResearchRequest(ticker="TEST"))
+    assert tools.execute("web_search", {"query": "first"}).evidence_type == "search"
+    with pytest.raises(ToolError, match="SEARCH_MONTHLY_LIMIT"):
+        tools.execute("web_search", {"query": "second"})
 
 
 @pytest.mark.parametrize(

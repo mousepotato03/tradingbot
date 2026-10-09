@@ -54,7 +54,7 @@ Best for:
 
 Use for discovery and breadth.
 
-Search runs behind a provider adapter. Tavily is the default: its free plan (1,000 basic-search credits a month, no card) blocks at the limit instead of billing. Brave remains selectable with `TRADINGBOT_SEARCH_PROVIDER=brave`; it requires a card and bills beyond its monthly credit. Live searches are also capped locally per rolling 30 days (`TRADINGBOT_SEARCH_MONTHLY_LIMIT`, default 900). At the cap, or when the provider reports exhausted credits, the tool returns `SEARCH_MONTHLY_LIMIT` / `SEARCH_QUOTA_EXHAUSTED` and research continues with official tools and known source URLs. Search is the default discovery mechanism; Chromium is a fallback. Search snippets remain unusable as FACT evidence. OpenAI Responses native function calling chooses queries and follow-up sources autonomously.
+Search runs behind a provider adapter. Tavily is the default: its free plan (1,000 basic-search credits a month, no card) blocks at the limit instead of billing. Brave remains selectable with `TRADINGBOT_SEARCH_PROVIDER=brave`; it requires a card and bills beyond its monthly credit. Live searches are also capped locally per rolling 30 days (`TRADINGBOT_SEARCH_MONTHLY_LIMIT`, default 900). At the cap, or when the provider reports exhausted credits, the tool returns `SEARCH_MONTHLY_LIMIT` / `SEARCH_QUOTA_EXHAUSTED` and research continues with official tools and known source URLs. Search is the default discovery mechanism. Search snippets remain unusable as FACT evidence. OpenAI Responses native function calling chooses queries and follow-up sources autonomously.
 
 The research agent may formulate new searches based on previous findings.
 
@@ -66,25 +66,9 @@ Rules:
 - prefer primary sources when available
 - search both confirming and disconfirming evidence
 
-### Tier D — Playwright / Chromium
+### Not supported — browser automation
 
-Optional and off by default (`TRADINGBOT_BROWSER_ENABLED`, Compose profile `browser`). Use only when direct reading is inadequate.
-
-Examples:
-
-- client-rendered pages
-- tabs/buttons
-- on-site search
-- infinite scroll
-- interactive tables
-- JS-only content
-- download buttons
-
-### Tier E — Computer-use style interaction
-
-Reserve for sites that genuinely require visual/UI interaction.
-
-It must not become the default browsing mechanism.
+There is no Chromium/Playwright or computer-use tool. Client-rendered pages, on-site search, interactive tables and download buttons that the direct reader cannot handle are reported as unavailable sources or material gaps; the researcher looks for the same fact in a filing, IR document or another readable source.
 
 ## 3. Tool contracts
 
@@ -250,24 +234,9 @@ search earnings
 
 The agent is allowed to formulate follow-up questions.
 
-## 9. Browser security
+## 9. Untrusted web content
 
-All page content is untrusted.
-
-The browser worker:
-
-- does not receive OpenAI keys unless technically unavoidable
-- does not receive Toss secrets
-- does not receive SSH keys
-- does not mount the Docker socket
-- does not expose unrestricted filesystem access
-- does not run arbitrary shell commands requested by webpages
-- restricts downloads to a sandbox directory
-- enforces timeouts
-- records visited URLs and actions
-- is read-only: only GET/HEAD requests leave the page, POST only to explicitly allowlisted hosts, and WebSockets never, so an injected instruction cannot submit a form or send data outward
-
-Prompt injection inside web content must be treated as content, not instruction.
+All page content is untrusted. Prompt injection inside web content must be treated as content, not instruction. Readers only GET public URLs (private networks are rejected), never send credentials, and the model has no shell.
 
 ## 10. Python calculation tool
 
@@ -334,13 +303,13 @@ This allows diagnosis of poor research quality without guessing. Read-only `evid
 
 ## 14. Implemented contracts and remaining data gaps
 
-`market_identity`, `market_quote`, `market_ohlcv`, `portfolio_read`, `fees_read`, `filings_read`, `financials_read`, `fund_holdings_read`, `web_search`, `web_read`, `browser_open`, `browser_action`, `extract_fact` and `calculate` return typed EvidenceRecords. `evidence_read` returns a read-only view of stored evidence (`part=text` with search/pagination, `facts` filtered by name, or `payload`). Peer tickers are allowed for comparable research; trade validation always checks the primary security.
+`market_identity`, `market_quote`, `market_ohlcv`, `portfolio_read`, `fees_read`, `filings_read`, `financials_read`, `fund_holdings_read`, `web_search`, `web_read`, `extract_fact` and `calculate` return typed EvidenceRecords. `evidence_read` returns a read-only view of stored evidence (`part=text` with search/pagination, `facts` filtered by name, or `payload`). Peer tickers are allowed for comparable research; trade validation always checks the primary security.
 
 Technicals and extracted facts preserve the source ticker; calculations preserve the first input ticker. A peer ratio can be a second calculation input, but a peer price cannot become a primary-security observation by relabeling the result. Precise level validation checks the recorded identity lineage, including older incorrectly labeled derivations (`LEVEL_IDENTITY`). Extraction checks scale and currency in the quote or its preceding 6,000 normalized characters; text after the quote cannot supply units.
 
 `web_search` accepts `freshness` (`pd`/`pw`/`pm`/`py` or `YYYY-MM-DDtoYYYY-MM-DD`), one `domain`, `country`, `search_lang`, `offset` (0–9) and `topic` (`general`/`news`/`finance`). Each provider maps what it supports: Tavily uses `time_range` or a date range, `include_domains`, country names (general topic only), `language` and `topic`, and has no offset. Brave uses `site:`, `country`, `search_lang` and `offset`, and has no topic. Options a provider cannot apply are recorded as `unsupported_options` in the evidence, not silently dropped. `web_read` extracts the main content of an HTML page, not the whole page. It removes navigation, headers, footers, consent banners, promos and forms, prefers `main`/`article` or the densest paragraph container, and keeps table rows on one line. Publication time comes from JSON-LD `datePublished`, then article/Dublin Core meta tags, then `<time>`. Only timezone-aware, non-future times are accepted. SEC hosts receive the configured SEC User-Agent; other hosts never do.
 
-The model context is an **evidence index**, not the evidence. For every record it shows the ID, type, source, timestamps, freshness, up to 40 structured facts, a 300-character snippet and a compact payload summary without page text, candles or browser element lists. A tool call returns the index entry plus a 4,000-character preview (browser calls also return element refs and tabs). Older tool outputs in a stage's conversation are condensed to their evidence ID, and only the latest screenshot is kept. The previous report is passed as a summary. Anything relied upon is read on demand with `evidence_read`.
+The model context is an **evidence index**, not the evidence. For every record it shows the ID, type, source, timestamps, freshness, up to 40 structured facts, a 300-character snippet and a compact payload summary without page text or candles. A tool call returns the index entry plus a 4,000-character preview. Older tool outputs in a stage's conversation are condensed to their evidence ID. The previous report is passed as a summary. Anything relied upon is read on demand with `evidence_read`.
 
 The director produces analysis sections and a first sufficiency assessment. Bull, bear, rebuttals and the research manager produce structured findings and can obtain additional evidence. Then `trade_proposal`, using the configured PM model, produces a provisional PortfolioDecision. Its full current plan/holding guard and deterministic validation are passed to the three risk perspectives and premortem before the final PM call. This prevents the committee from reviewing a thesis or an old report without seeing the proposed risk terms.
 
@@ -354,4 +323,4 @@ Official XBRL facts preserve metric tags, units, accounting periods and accessio
 
 ETFs follow a separate path: `fund_holdings_read` maps the ticker to its SEC series (`company_tickers_mf.json`) and parses the series' latest N-PORT filing (net assets, holdings count, top-10 and largest-holding weights, asset-category and country weights; `pctVal` is already a percent) with the summary prospectus (497K) link. Issuer financial statements are not required for an ETF; the N-PORT holdings are its official structured basis.
 
-Image-only PDFs remain a limitation. HTML/PDF body retention is restricted by approved host; other sources preserve hashes, metadata, page numbers and snippets. Screenshots can be used by the model without keeping image files. See [retention and replay](RUNTIME.md#7-보존과-replay).
+Image-only PDFs remain a limitation. HTML/PDF body retention is restricted by approved host; other sources preserve hashes, metadata, page numbers and snippets. See [retention and replay](RUNTIME.md#7-보존과-replay).

@@ -10,7 +10,6 @@ from app.analytics import (
     position_size,
     reward_risk,
     rsi,
-    safe_ratio,
     sma,
 )
 from app.evaluation import excursions, forward_outcomes, reference_date
@@ -66,8 +65,6 @@ def test_analytics_reject_bad_inputs():
         sma([1, float("nan")], 2)
     with pytest.raises(ValueError):
         rsi([100])
-    with pytest.raises(ValueError):
-        safe_ratio(D(1), D(0))
 
 
 def test_forward_outcomes_and_actual_high_low_excursions():

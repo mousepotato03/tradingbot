@@ -66,15 +66,6 @@ class UrlInput(Model):
     url: str
 
 
-class BrowserAction(Model):
-    action: Literal["click", "type", "scroll", "screenshot", "back", "tab", "close"]
-    ref: str | None = None
-    text: str | None = None
-    x: int | None = None
-    y: int | None = None
-    amount: int | None = None
-
-
 class CalculateInput(Model):
     operation: Literal["ratio", "multiply", "add", "subtract", "atr_offset"]
     evidence_id: str
@@ -176,7 +167,6 @@ class ToolRegistry:
         self.ticker = ticker
         self.definitions: dict[str, tuple[type[Model], Callable, str]] = {}
         self.records: list[EvidenceRecord] = []
-        self.images: list[str] = []
 
     def add(self, name: str, inputs: type[Model], handler: Callable, description: str):
         self.definitions[name] = inputs, handler, description

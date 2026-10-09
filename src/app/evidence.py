@@ -362,19 +362,13 @@ def lineage_identity(
 
 def persistent_record(record: EvidenceRecord) -> EvidenceRecord:
     """Keep full originals only for approved hosts; retain provenance and bounded snippets otherwise."""
-    if record.evidence_type not in {"document", "browser"} or record.payload.get(
-        "retain_full_text"
-    ):
+    if record.evidence_type != "document" or record.payload.get("retain_full_text"):
         return record
     data = record.model_dump(mode="json")
     data["text"] = record.text[:1200]
     payload = data["payload"]
     for page in payload.get("pages", []):
         page["text"] = ""
-    for download in payload.get("downloads", []):
-        download["text"] = download.get("text", "")[:500]
-        for page in download.get("pages", []):
-            page["text"] = ""
     payload["retention"] = "metadata_hash_and_snippet"
     data["warnings"].append(
         "Original body retained only as a snippet; reopen source for omitted text"
