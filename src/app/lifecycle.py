@@ -73,11 +73,15 @@ def candidate_state(
 
 def own_guard(report: ResearchReport):
     """The guard this report's own decision validated, if any."""
+    if report.investment_style == "long_term_accumulation":
+        return None
     return report.decision.position_guard if report.validation.valid else None
 
 
 def guard_of(report: ResearchReport):
     """The monitored holding guard: the report's own, else the one it inherited."""
+    if report.investment_style == "long_term_accumulation":
+        return None
     return own_guard(report) or report.inherited_guard
 
 
@@ -89,6 +93,7 @@ def inherit_guard(report: ResearchReport, previous: ResearchReport | None) -> No
     """
     if (
         previous is None
+        or report.investment_style == "long_term_accumulation"
         or report.candidate_state != State.ACTIVE
         or own_guard(report) is not None
         or guard_of(previous) is None

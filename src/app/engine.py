@@ -817,6 +817,7 @@ class ResearchEngine:
         report = ResearchReport(
             run_id=run_id,
             ticker=request.ticker,
+            investment_style=request.investment_style,
             as_of=request.as_of or utcnow(),
             created_at=utcnow(),
             fixture=self.settings.mode == "fixture",

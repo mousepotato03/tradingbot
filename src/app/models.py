@@ -152,6 +152,8 @@ class ResearchRequest(Model):
     mode: Literal["quick", "normal", "deep", "critical"] = "deep"
     investor_status: str = "신규 진입 검토"
     horizon: str | None = None
+    # Explicit investor intent, never inferred solely from the ETF asset type.
+    investment_style: Literal["risk_managed", "long_term_accumulation"] = "risk_managed"
     question: str | None = None
     risk: RiskInputs | None = None
     report_policy: Literal["changes", "always", "none"] = "changes"
@@ -414,6 +416,8 @@ class ValidationResult(Model):
 class ResearchReport(Model):
     run_id: str
     ticker: str
+    # Older reports predate investment styles and retain risk-managed monitoring.
+    investment_style: Literal["risk_managed", "long_term_accumulation"] = "risk_managed"
     as_of: datetime
     created_at: datetime
     fixture: bool

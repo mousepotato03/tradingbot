@@ -197,6 +197,7 @@ def validate_decision(
     if (
         held
         and guard is None
+        and request.investment_style != "long_term_accumulation"
         and decision.rating != Rating.DEFER
         and decision.holder_action != HolderAction.EXIT
     ):
@@ -206,6 +207,12 @@ def validate_decision(
             "A held position needs an evidence-backed stop the monitor can watch",
         )
     if guard is not None:
+        if request.investment_style == "long_term_accumulation":
+            error(
+                "ACCUMULATION_PRICE_GUARD",
+                "position_guard",
+                "Long-term accumulation uses thesis and allocation reviews, not a price stop",
+            )
         if held == 0:
             error("GUARD_WITHOUT_POSITION", "position_guard", "The account holds no position")
         guard_price = current_price(guard.currency, "position_guard")

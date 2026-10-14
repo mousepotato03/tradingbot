@@ -317,14 +317,15 @@ Only calculate when all inputs are validated and comparable.
 
 ### Holding guard
 
-An existing holding needs levels the monitor can watch, not only a narrative. For a position the account shows as held, the portfolio manager provides `position_guard` unless the holder action is `EXIT`:
+For `risk_managed` holdings (default), a holding needs levels the monitor can watch, not only a narrative. The portfolio manager provides `position_guard` unless holder action is `EXIT`. For explicitly designated `long_term_accumulation`, a price stop guard is neither required nor allowed; the system reviews thesis and allocation rather than implying liquidation from a technical price threshold. Do not infer strategy from ETF identity:
+
 
 - a stop below the current price (for example the structural low that breaks the thesis, or a loss limit) and optional take-profit prices above it, where a trim should be reviewed;
 - each level equals an observed or deterministically calculated price fact, like trade-plan levels.
 
 The validator checks evidence, lineage freshness and position relative to the fresh price. A guard may accompany 판단 보류: it protects the existing holding and is not a new trade. Guard levels are judged only on regular-session prices, so thin pre-market or after-hours trades do not trigger them.
 
-A guard, once validated, stays in force for a held position until a newer guard validates. When a report for a position the account still holds validates no guard of its own (판단 보류 without a guard, a rejected decision, or levels that cannot be validated), the report records the previous effective guard as `inherited_guard` with the report that validated it, and the monitor keeps watching it. The decision itself is not changed; the alert and report mark the stop as carried over. The PM sees the guard in force in the previous-report summary and keeps or replaces it. Only a position the account no longer holds ends stop monitoring.
+A guard, once validated, stays in force for a held position until a newer guard validates. When a report for a position the account still holds validates no guard of its own (판단 보류 without a guard, a rejected decision, or levels that cannot be validated), the report records the previous effective guard as `inherited_guard` with the report that validated it, and the monitor keeps watching it. The decision itself is not changed; the alert and report mark the stop as carried over. The PM sees the guard in force in the previous-report summary and keeps or replaces it. Only a position the account no longer holds ends stop monitoring **within a risk-managed strategy**. An explicit strategy change to long-term accumulation also retires the old guard, while retaining the holding, periodic research and evidence-based risk reviews.
 
 ## 12. New entrant vs holder
 
@@ -358,6 +359,21 @@ The final manager weighs:
 Plain (unleveraged, non-inverse) ETFs are researched on their own terms: index and methodology, expense ratio, holdings concentration, sector/country exposure, liquidity and tracking. Issuer financial statements do not apply. The official structured basis is the fund's latest SEC N-PORT filing (holdings, net assets, asset and country mix), with the summary prospectus for fees and strategy. Weights in N-PORT lag the report date and must be labeled as such.
 
 Leveraged or inverse funds and ETNs are rejected at identity. Funds absent from SEC's fund ticker mapping (`company_tickers_mf.json`), such as UIT-structured SPY without a series ID, have no automated holdings source yet and resolve to 판단 보류 rather than an equity-style analysis.
+
+### Explicit accumulation policy
+
+`ResearchRequest.investment_style` is `risk_managed` by default or explicitly
+`long_term_accumulation` for investor-selected holdings (such as broad, unleveraged ETFs).
+An ETF is not automatically an accumulation holding. When selected:
+
+- Preserve the portfolio manager's existing Buy / Overweight / Hold / Underweight / Sell / 판단 보류 ratings.
+- `ADD` remains allowed only under the evidence-backed Buy / Overweight contract. A price dip never mandates buying, and no order is placed by this service.
+- Omit `position_guard` and price stop alerts for the holding; do not silently inherit a previous tactical stop.
+- Preserve routine research and data-quality alerts. Evaluate fund thesis, benchmark/methodology,
+  tracking, costs, portfolio allocation, currency and changing investor time horizon.
+- Do not invent allocation targets, purchases, stop prices or portfolio limits.
+- A thesis failure can still lead to Underweight/Sell regardless of the accumulation designation.
+- Explicitly updating a watch's request refreshes research and replaces the old strategy for alerts.
 
 ## 15. No-action is a real decision, not a default
 
