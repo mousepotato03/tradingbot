@@ -93,6 +93,7 @@ def inherit_guard(report: ResearchReport, previous: ResearchReport | None) -> No
     """
     if (
         previous is None
+        or report.investment_style == "long_term_accumulation"
         or report.candidate_state != State.ACTIVE
         or own_guard(report) is not None
         or guard_of(previous) is None
