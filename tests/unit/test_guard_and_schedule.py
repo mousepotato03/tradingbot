@@ -369,8 +369,7 @@ def test_strategy_switch_never_fires_a_previous_tactical_stop(store, settings):
     watch.tick()
     with store.transaction() as session:
         assert not any(
-            alert.body["kind"] == "HOLDER_STOP"
-            for alert in session.scalars(select(OutboxRow))
+            alert.body["kind"] == "HOLDER_STOP" for alert in session.scalars(select(OutboxRow))
         )
         pending = session.scalar(
             select(RunRow).where(RunRow.ticker == "TEST", RunRow.status == "PENDING")
@@ -391,9 +390,7 @@ def test_strategy_switch_never_fires_a_previous_tactical_stop(store, settings):
 def test_accumulation_holding_can_be_validated_without_a_guard(store, settings):
     engine = ResearchEngine(settings, store, model=FixtureModel(), market=Held())
     report = engine.run(
-        store.enqueue(
-            ResearchRequest(ticker="TEST", investment_style="long_term_accumulation")
-        )
+        store.enqueue(ResearchRequest(ticker="TEST", investment_style="long_term_accumulation"))
     )
     assert report.validation.valid, report.validation.issues
     assert report.investment_style == "long_term_accumulation"
