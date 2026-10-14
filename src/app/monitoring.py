@@ -146,10 +146,16 @@ class Monitor:
         if style != report.investment_style:
             # Wait for a strategy-aware research decision before using old price levels.
             return
+        quantity = body.get("quantity")
+        held = (
+            Decimal(quantity) > 0
+            if quantity is not None
+            else report.candidate_state == CandidateState.ACTIVE
+        )
         plan = report.decision.trade_plan if report.validation.valid else None
         guard = guard_of(report)
         if plan:
-            if style != "long_term_accumulation" and price <= plan.stop.value:
+            if not (style == "long_term_accumulation" and held) and price <= plan.stop.value:
                 signals.add("INVALIDATION_PRICE")
                 details["INVALIDATION_PRICE"] = (
                     f"현재가 {price} {plan.currency} ≤ 무효화 가격 {plan.stop.value}"
@@ -171,12 +177,6 @@ class Monitor:
                     details[entry_signal] += "; 추가 조건 재검토 필요: " + "; ".join(
                         plan.conditions
                     )
-        quantity = body.get("quantity")
-        held = (
-            Decimal(quantity) > 0
-            if quantity is not None
-            else report.candidate_state == CandidateState.ACTIVE
-        )
         if guard and held and style != "long_term_accumulation":
             if price <= guard.stop.value:
                 signals.add("HOLDER_STOP")
