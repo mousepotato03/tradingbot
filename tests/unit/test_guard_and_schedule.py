@@ -375,13 +375,14 @@ def test_strategy_switch_never_fires_a_previous_tactical_stop(store, settings):
             select(RunRow).where(RunRow.ticker == "TEST", RunRow.status == "PENDING")
         )
         assert pending is not None
+        pending_id = pending.id
         new_request = ResearchRequest.model_validate(pending.request)
         assert new_request.investment_style == "long_term_accumulation"
         assert new_request.horizon == "5년 이상"
 
     # The previous stop is not silently inherited after a deferred re-research either.
     new_engine = ResearchEngine(settings, store, model=FixtureModel("missing"), market=market)
-    second = new_engine.run(pending.id)
+    second = new_engine.run(pending_id)
     assert second.investment_style == "long_term_accumulation"
     assert second.inherited_guard is None
     assert guard_of(second) is None
