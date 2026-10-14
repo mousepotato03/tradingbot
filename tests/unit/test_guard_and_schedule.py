@@ -339,3 +339,63 @@ def test_calendar_times_with_an_offset_are_stored_as_utc(store):
         stored = session.get(WatchRow, "TZ").next_research_at
     # 22:40 KST is 13:40 UTC; the monitor reads stored times as naive UTC.
     assert stored.replace(tzinfo=None) == datetime(2026, 10, 9, 13, 40)
+
+
+def test_explicit_accumulation_does_not_require_a_price_stop():
+    request = ResearchRequest(ticker="TEST", investment_style="long_term_accumulation")
+    unguarded = validate_decision(decision(), records(), request, utcnow())
+    assert unguarded.valid, unguarded.issues
+
+    guarded = validate_decision(decision(position_guard=guard()), records(), request, utcnow())
+    assert "ACCUMULATION_PRICE_GUARD" in {issue.code for issue in guarded.issues}
+
+
+def test_strategy_switch_never_fires_a_previous_tactical_stop(store, settings):
+    engine, market, first = held_report(store, settings)
+    stop = first.decision.position_guard.stop.value
+    market.price = str(stop - 1)
+
+    watch = Monitor(engine)
+    watch.watch(
+        "TEST",
+        ResearchRequest(
+            ticker="TEST",
+            investor_status="기존 보유",
+            investment_style="long_term_accumulation",
+            horizon="5년 이상",
+        ),
+    )
+    # The old research decision must not fire a stop while strategy-aware research is pending.
+    watch.tick()
+    with store.transaction() as session:
+        assert not any(
+            alert.body["kind"] == "HOLDER_STOP"
+            for alert in session.scalars(select(OutboxRow))
+        )
+        pending = session.scalar(
+            select(RunRow).where(RunRow.ticker == "TEST", RunRow.status == "PENDING")
+        )
+        assert pending is not None
+        new_request = ResearchRequest.model_validate(pending.request)
+        assert new_request.investment_style == "long_term_accumulation"
+        assert new_request.horizon == "5년 이상"
+
+    # The previous stop is not silently inherited after a deferred re-research either.
+    new_engine = ResearchEngine(settings, store, model=FixtureModel("missing"), market=market)
+    second = new_engine.run(pending.id)
+    assert second.investment_style == "long_term_accumulation"
+    assert second.inherited_guard is None
+    assert guard_of(second) is None
+
+
+def test_accumulation_holding_can_be_validated_without_a_guard(store, settings):
+    engine = ResearchEngine(settings, store, model=FixtureModel(), market=Held())
+    report = engine.run(
+        store.enqueue(
+            ResearchRequest(ticker="TEST", investment_style="long_term_accumulation")
+        )
+    )
+    assert report.validation.valid, report.validation.issues
+    assert report.investment_style == "long_term_accumulation"
+    assert report.decision.position_guard is None
+    assert guard_of(report) is None
