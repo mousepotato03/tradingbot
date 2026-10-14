@@ -74,12 +74,19 @@ class Monitor:
         self._account = None  # (monotonic fetch time, record or None, error or None)
 
     def watch(self, ticker, request: ResearchRequest | None = None):
+        explicit = request is not None
         request = request or ResearchRequest(ticker=ticker)
         base = request.model_dump(mode="json", exclude={"as_of", "trigger"})
         with self.store.transaction() as session:
             row = session.get(WatchRow, request.ticker)
             if row is None:
                 session.add(WatchRow(ticker=request.ticker, body={"base_request": base}))
+            elif explicit:
+                # Explicit reconfiguration replaces stale investor intent, even for auto-watched
+                # holdings. Trigger fresh research; the previous strategy's levels must not fire.
+                row.body = {**row.body, "base_request": base, "signals": []}
+                row.next_research_at = utcnow()
+                row.next_condition_at = utcnow()
             elif "base_request" not in row.body:
                 row.body = {**row.body, "base_request": base}
 
@@ -135,10 +142,14 @@ class Monitor:
     @staticmethod
     def _check_levels(report, body, price, signals, details):
         """Compare a regular-session price with the report's validated levels."""
+        style = (body.get("base_request") or {}).get("investment_style", "risk_managed")
+        if style != report.investment_style:
+            # Wait for a strategy-aware research decision before using old price levels.
+            return
         plan = report.decision.trade_plan if report.validation.valid else None
         guard = guard_of(report)
         if plan:
-            if price <= plan.stop.value:
+            if style != "long_term_accumulation" and price <= plan.stop.value:
                 signals.add("INVALIDATION_PRICE")
                 details["INVALIDATION_PRICE"] = (
                     f"현재가 {price} {plan.currency} ≤ 무효화 가격 {plan.stop.value}"
@@ -166,7 +177,7 @@ class Monitor:
             if quantity is not None
             else report.candidate_state == CandidateState.ACTIVE
         )
-        if guard and held:
+        if guard and held and style != "long_term_accumulation":
             if price <= guard.stop.value:
                 signals.add("HOLDER_STOP")
                 details["HOLDER_STOP"] = (
@@ -211,7 +222,11 @@ class Monitor:
             ticker: report
             for ticker, report in reports.items()
             if report
+            and (body.get("base_request") or {}).get("investment_style", "risk_managed")
+            == report.investment_style
             and ((report.validation.valid and report.decision.trade_plan) or guard_of(report))
+            for watched_ticker, body in watched
+            if watched_ticker == ticker
         }
         quotes, batch_error = {}, None
         if priced:
