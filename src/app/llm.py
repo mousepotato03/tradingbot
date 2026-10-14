@@ -86,13 +86,20 @@ The risk committee and premortem review that draft and its deterministic validat
 portfolio_manager finalizes after their reviews. Changes to actions, entry, stop, targets, sizing,
 conditions, horizon or holding guards require renewed risk review before publication.
 ENTER_NOW/STAGED_ENTRY need the fresh price inside the entry range; otherwise use CONDITIONAL_ENTRY.
-When the account evidence shows the position is held, provide position_guard unless holder_action
-is EXIT: a stop below the current price and optional take_profit levels above it, each equal to an
+When the account evidence shows the position is held AND investment_style is risk_managed,
+provide position_guard unless holder_action is EXIT: a stop below the current price and optional
+take_profit levels above it, each equal to an
 evidence fact in USD/share (e.g. sma200, recent_low, low_52w, or a calculate result such as
 recent_low minus an ATR multiple). The monitor alerts when a regular-session price crosses them.
 A guard may accompany 판단 보류; it protects the holding, it is not a new trade.
-previous_report.position_guard is the stop the monitor watches now. Keep or replace it with a
-validated guard; if a held position gets none, that previous guard stays in force.
+For risk_managed holdings, previous_report.position_guard is the stop the monitor watches now.
+Keep or replace it with a validated guard; if a held position gets none, that guard stays in force.
+The request's investment_style is explicit user intent, not inferred from a fund's ticker/type.
+For long_term_accumulation, omit position_guard. Assess additions from portfolio allocation,
+fund thesis, risks, time horizon and verified evidence, not price declines alone. ADD remains a
+possible holder_action on Buy/Overweight, but never auto-buy, infer target weights, or treat
+short-term technical breakdowns as mandatory liquidation. A materially broken thesis can
+still justify TRIM/EXIT; explain it independently of a mechanical price stop.
 Notes (new_entry_note, holder_note) stay qualitative. sizing_unit=fractional_amount means a USD
 market order by amount (no limit price); otherwise quantities are whole shares.
 For an ETF, research the index/methodology, expense ratio (summary prospectus), holdings
