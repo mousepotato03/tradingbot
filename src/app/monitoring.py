@@ -219,14 +219,15 @@ class Monitor:
         # Reports whose validated levels the monitor can check: an entry plan, a holding guard
         # (the report's own or the one a held position inherited).
         priced = {
-            ticker: report
-            for ticker, report in reports.items()
-            if report
+            ticker: reports[ticker]
+            for ticker, body in watched
+            if reports[ticker]
             and (body.get("base_request") or {}).get("investment_style", "risk_managed")
-            == report.investment_style
-            and ((report.validation.valid and report.decision.trade_plan) or guard_of(report))
-            for watched_ticker, body in watched
-            if watched_ticker == ticker
+            == reports[ticker].investment_style
+            and (
+                (reports[ticker].validation.valid and reports[ticker].decision.trade_plan)
+                or guard_of(reports[ticker])
+            )
         }
         quotes, batch_error = {}, None
         if priced:
