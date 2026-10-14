@@ -29,6 +29,7 @@ def markdown(report: ResearchReport, records: list[EvidenceRecord]) -> str:
         "# 1) 최종 결론 요약",
         "",
         f"- 기준 시각: {report.as_of.isoformat()}",
+        f"- 운용 전략: {'장기 적립 (논지·배분 재검토)' if report.investment_style == 'long_term_accumulation' else '가격 위험관리'}",
         f"- 등급: {decision.rating.value}",
         f"- 신규 진입자: {action_text(decision.new_entry_action, decision.new_entry_note)}",
         f"- 기존 보유자: {action_text(decision.holder_action, decision.holder_note)}",
@@ -101,6 +102,8 @@ def markdown(report: ResearchReport, records: list[EvidenceRecord]) -> str:
         lines.append("검증된 정밀 거래 계획 없음. 부족한 입력이나 검증 오류를 먼저 확인합니다.")
     lines += [f"- 무효화: {c}" for c in decision.invalidation_conditions]
     guard = guard_of(report)
+    if report.investment_style == "long_term_accumulation":
+        lines.append("- 장기 적립 설정: 가격 손절·익절 알림 대신 투자 논지와 비중을 재평가합니다.")
     if guard:
         lines += ["", "## 보유 포지션 손절·익절 감시", ""]
         if own_guard(report) is None:
